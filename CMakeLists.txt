@@ -35,7 +35,10 @@ pico_sdk_init()
 
 # Add executable. Default name is the project name, version 0.1
 
-add_executable(RangeTestSoftware RangeTestSoftware.c )
+add_executable(RangeTestSoftware
+        RangeTestSoftware.c
+        board_pins.c
+        )
 
 pico_set_program_name(RangeTestSoftware "RangeTestSoftware")
 pico_set_program_version(RangeTestSoftware "0.1")
@@ -65,4 +68,3 @@ target_link_libraries(RangeTestSoftware
         )
 
 pico_add_extra_outputs(RangeTestSoftware)
-
