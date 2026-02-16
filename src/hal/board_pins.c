@@ -1,4 +1,4 @@
-#include "board_pins.h"
+#include "hal/board_pins.h"
 
 #include "pico/stdlib.h"
 

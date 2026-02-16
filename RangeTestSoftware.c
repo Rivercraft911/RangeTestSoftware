@@ -1,7 +1,9 @@
 #include <stdio.h>
 #include "pico/stdlib.h"
 
-#include "board_pins.h"
+#include "hal/board_pins.h"
+#include "protocol/range_packet.h"
+
 
 int main()
 {
@@ -9,5 +11,5 @@ int main()
     board_pins_init();
 
     printf("Range test Started.\n");
-    
+
 }

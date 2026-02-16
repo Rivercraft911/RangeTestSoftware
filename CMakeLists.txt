@@ -37,14 +37,14 @@ pico_sdk_init()
 
 add_executable(RangeTestSoftware
         RangeTestSoftware.c
-        board_pins.c
+        src/hal/board_pins.c
         )
 
 pico_set_program_name(RangeTestSoftware "RangeTestSoftware")
 pico_set_program_version(RangeTestSoftware "0.1")
 
 # Generate PIO header
-pico_generate_pio_header(RangeTestSoftware ${CMAKE_CURRENT_LIST_DIR}/blink.pio)
+pico_generate_pio_header(RangeTestSoftware ${CMAKE_CURRENT_LIST_DIR}/pio/blink.pio)
 
 # Modify the below lines to enable/disable output over UART/USB
 pico_enable_stdio_uart(RangeTestSoftware 0)
@@ -56,7 +56,7 @@ target_link_libraries(RangeTestSoftware
 
 # Add the standard include files to the build
 target_include_directories(RangeTestSoftware PRIVATE
-        ${CMAKE_CURRENT_LIST_DIR}
+        ${CMAKE_CURRENT_LIST_DIR}/include
 )
 
 # Add any user requested libraries
