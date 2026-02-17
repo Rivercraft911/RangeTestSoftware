@@ -38,6 +38,8 @@ pico_sdk_init()
 add_executable(RangeTestSoftware
         RangeTestSoftware.c
         src/hal/board_pins.c
+        src/radio/radio_sx1280f27.c
+        src/radio/radio_rfm98pw.c
         )
 
 pico_set_program_name(RangeTestSoftware "RangeTestSoftware")
