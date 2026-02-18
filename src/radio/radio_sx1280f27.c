@@ -249,7 +249,9 @@ static radio_status_t sx1280_set_tx_params(int8_t dbm) {
     } else if (dbm < -18) {
         dbm = -18;
     }
-    const uint8_t data[] = {(uint8_t)dbm, SX1280_PA_RAMP_10_US};
+    // SX1280 expects power in [0..31], mapping to physical [-18..13] dBm.
+    const uint8_t power_code = (uint8_t)(dbm + 18);
+    const uint8_t data[] = {power_code, SX1280_PA_RAMP_10_US};
     return sx1280_write_cmd(SX1280_CMD_SET_TX_PARAMS, data, sizeof(data));
 }
 
