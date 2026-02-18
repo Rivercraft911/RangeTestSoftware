@@ -70,3 +70,32 @@ target_link_libraries(RangeTestSoftware
         )
 
 pico_add_extra_outputs(RangeTestSoftware)
+
+add_executable(ManualRadioBringupTest
+        src/tests/manual_radio_bringup_test.c
+        src/hal/board_pins.c
+        src/radio/radio_sx1280f27.c
+        src/radio/radio_rfm98pw.c
+        )
+
+pico_set_program_name(ManualRadioBringupTest "ManualRadioBringupTest")
+pico_set_program_version(ManualRadioBringupTest "0.1")
+
+pico_generate_pio_header(ManualRadioBringupTest ${CMAKE_CURRENT_LIST_DIR}/pio/ws2812.pio)
+
+pico_enable_stdio_uart(ManualRadioBringupTest 0)
+pico_enable_stdio_usb(ManualRadioBringupTest 1)
+
+target_link_libraries(ManualRadioBringupTest
+        pico_stdlib
+        hardware_spi
+        hardware_pio
+        hardware_timer
+        hardware_watchdog
+        )
+
+target_include_directories(ManualRadioBringupTest PRIVATE
+        ${CMAKE_CURRENT_LIST_DIR}/include
+)
+
+pico_add_extra_outputs(ManualRadioBringupTest)
