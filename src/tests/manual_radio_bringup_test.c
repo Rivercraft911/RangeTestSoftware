@@ -25,8 +25,9 @@ typedef enum {
     RUN_RX_ONLY
 } run_mode_t;
 
-#define SBAND_BRINGUP_TX_DBM (-18)
+#define SBAND_BRINGUP_TX_DBM (10)
 #define UHF_BRINGUP_TX_DBM (2)
+#define SBAND_TX_OK_PULSE_MS (150)
 
 static uint32_t urgb_u32(uint8_t r, uint8_t g, uint8_t b) {
     return ((uint32_t)r << 8) | ((uint32_t)g << 16) | b;
@@ -237,7 +238,6 @@ int main(void) {
     print_help();
     printf("Selected radio at boot: %s\n", radio_to_str(radio));
     printf("Radio is NOT initialized at boot. Use 'b', 'u', or 'a' first.\n");
-    printf("Note: use a 50 ohm load or antenna before TX.\n");
     printf("Waiting for command. Press '1' to start AUTO mode.\n");
 
     uint32_t packet_counter = 0u;
@@ -248,6 +248,9 @@ int main(void) {
     bool op_active = false;
     bool led_on = false;
     absolute_time_t led_next_toggle = get_absolute_time();
+    bool sband_tx_ok_pulse_active = false;
+    bool sband_tx_ok_pulse_latched = false;
+    absolute_time_t sband_tx_ok_pulse_deadline = get_absolute_time();
     absolute_time_t status_next_print = delayed_by_ms(get_absolute_time(), 1000);
 
     while (true) {
@@ -336,7 +339,18 @@ int main(void) {
             printf("---- Enter %s phase ----\n", tx_phase ? "TX" : "RX");
         }
 
-        if (absolute_time_diff_us(get_absolute_time(), led_next_toggle) <= 0) {
+        if (sband_tx_ok_pulse_active) {
+            if (!sband_tx_ok_pulse_latched) {
+                // Pink pulse indicates confirmed SX1280 TX_DONE.
+                set_led_color(pio, sm, 48u, 0u, 28u);
+                sband_tx_ok_pulse_latched = true;
+            }
+            if (absolute_time_diff_us(get_absolute_time(), sband_tx_ok_pulse_deadline) <= 0) {
+                sband_tx_ok_pulse_active = false;
+                sband_tx_ok_pulse_latched = false;
+                led_next_toggle = get_absolute_time();
+            }
+        } else if (absolute_time_diff_us(get_absolute_time(), led_next_toggle) <= 0) {
             led_on = !led_on;
             if (mode == RUN_STOPPED) {
                 set_led_color(pio, sm, led_on ? 0u : 0u, led_on ? 8u : 0u, led_on ? 0u : 0u);
@@ -417,6 +431,10 @@ int main(void) {
                     } else {
                         printf("read_rx status=%d\n", (int)rx_st);
                     }
+                } else if ((event == RADIO_EVENT_TX_DONE) && (radio == TEST_RADIO_SBAND)) {
+                    sband_tx_ok_pulse_active = true;
+                    sband_tx_ok_pulse_latched = false;
+                    sband_tx_ok_pulse_deadline = delayed_by_ms(get_absolute_time(), SBAND_TX_OK_PULSE_MS);
                 }
                 op_active = false;
             }
