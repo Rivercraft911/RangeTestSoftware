@@ -99,3 +99,19 @@ target_include_directories(ManualRadioBringupTest PRIVATE
 )
 
 pico_add_extra_outputs(ManualRadioBringupTest)
+
+add_executable(UsbConsoleSanityTest
+        src/tests/usb_console_sanity_test.c
+        )
+
+pico_set_program_name(UsbConsoleSanityTest "UsbConsoleSanityTest")
+pico_set_program_version(UsbConsoleSanityTest "0.1")
+
+pico_enable_stdio_uart(UsbConsoleSanityTest 0)
+pico_enable_stdio_usb(UsbConsoleSanityTest 1)
+
+target_link_libraries(UsbConsoleSanityTest
+        pico_stdlib
+        )
+
+pico_add_extra_outputs(UsbConsoleSanityTest)

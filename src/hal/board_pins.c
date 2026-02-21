@@ -21,6 +21,7 @@ static void init_input(uint pin) {
 
 void board_pins_init(void) {
     spi_init(UHF_SPI_PORT, RADIO_SPI_BAUD_HZ);
+    spi_set_format(UHF_SPI_PORT, 8u, SPI_CPOL_0, SPI_CPHA_0, SPI_MSB_FIRST);
     gpio_set_function(PIN_UHF_MISO, GPIO_FUNC_SPI);
     gpio_set_function(PIN_UHF_SCK, GPIO_FUNC_SPI);
     gpio_set_function(PIN_UHF_MOSI, GPIO_FUNC_SPI);
@@ -29,6 +30,7 @@ void board_pins_init(void) {
     init_input(PIN_UHF_DIO0);
 
     spi_init(SBAND_SPI_PORT, RADIO_SPI_BAUD_HZ);
+    spi_set_format(SBAND_SPI_PORT, 8u, SPI_CPOL_0, SPI_CPHA_0, SPI_MSB_FIRST);
     gpio_set_function(PIN_SBAND_MISO, GPIO_FUNC_SPI);
     gpio_set_function(PIN_SBAND_SCK, GPIO_FUNC_SPI);
     gpio_set_function(PIN_SBAND_MOSI, GPIO_FUNC_SPI);
