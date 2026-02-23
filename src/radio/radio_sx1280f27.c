@@ -43,6 +43,16 @@ enum {
     SX1280_PACKET_TYPE_LORA = 0x01,
     SX1280_PERIOD_BASE_15_625_US = 0x00,
     SX1280_LORA_SF_5 = 0x50,
+    SX1280_LORA_SF_6 = 0x60,
+    SX1280_LORA_SF_7 = 0x70,
+    SX1280_LORA_SF_8 = 0x80,
+    SX1280_LORA_SF_9 = 0x90,
+    SX1280_LORA_SF_10 = 0xA0,
+    SX1280_LORA_SF_11 = 0xB0,
+    SX1280_LORA_SF_12 = 0xC0,
+    SX1280_LORA_BW_1625 = 0x0A,
+    SX1280_LORA_BW_812_5 = 0x18,
+    SX1280_LORA_BW_406_25 = 0x26,
     SX1280_LORA_BW_203_125 = 0x34,
     SX1280_LORA_CR_4_5 = 0x01,
     SX1280_LORA_HEADER_EXPLICIT = 0x00,
@@ -95,6 +105,26 @@ typedef struct {
     radio_rx_frame_t rx_frame;
 } sx1280_ctx_t;
 
+typedef struct {
+    uint8_t profile_id;
+    uint8_t sf_code;
+    uint8_t bw_code;
+    uint8_t cr_code;
+    uint8_t sf_value;
+    uint16_t bw_khz_x10;
+} sx1280_profile_cfg_t;
+
+static const sx1280_profile_cfg_t g_sx1280_profiles[] = {
+    // cfg0: SF7, BW1625kHz, CR4/5
+    {.profile_id = 1u, .sf_code = SX1280_LORA_SF_7, .bw_code = SX1280_LORA_BW_1625, .cr_code = SX1280_LORA_CR_4_5, .sf_value = 7u, .bw_khz_x10 = 16250u},
+    // cfg1: SF7, BW812kHz, CR4/5
+    {.profile_id = 2u, .sf_code = SX1280_LORA_SF_7, .bw_code = SX1280_LORA_BW_812_5, .cr_code = SX1280_LORA_CR_4_5, .sf_value = 7u, .bw_khz_x10 = 8125u},
+    // cfg2: SF8, BW406kHz, CR4/5
+    {.profile_id = 3u, .sf_code = SX1280_LORA_SF_8, .bw_code = SX1280_LORA_BW_406_25, .cr_code = SX1280_LORA_CR_4_5, .sf_value = 8u, .bw_khz_x10 = 4062u},
+    // cfg3: SF10, BW203kHz, CR4/5
+    {.profile_id = 4u, .sf_code = SX1280_LORA_SF_10, .bw_code = SX1280_LORA_BW_203_125, .cr_code = SX1280_LORA_CR_4_5, .sf_value = 10u, .bw_khz_x10 = 2031u},
+};
+
 static sx1280_ctx_t g_sx1280 = {
     .initialized = false,
     .rx_valid = false,
@@ -108,12 +138,10 @@ static sx1280_ctx_t g_sx1280 = {
 // Logging
 // -----------------------------------------------------------------------------
 
-enum {
-    SX1280_LOG_LEVEL_ERROR = 1,
-    SX1280_LOG_LEVEL_WARN = 2,
-    SX1280_LOG_LEVEL_INFO = 3,
-    SX1280_LOG_LEVEL_TRACE = 4
-};
+#define SX1280_LOG_LEVEL_ERROR 1
+#define SX1280_LOG_LEVEL_WARN 2
+#define SX1280_LOG_LEVEL_INFO 3
+#define SX1280_LOG_LEVEL_TRACE 4
 
 #ifndef SX1280F27_LOG_LEVEL
 #ifdef SX1280F27_DEBUG
@@ -226,7 +254,12 @@ static radio_status_t sx1280_wait_ready_or_log(uint8_t cmd, const char *phase) {
     if (sx1280_wait_while_busy(50u)) {
         return RADIO_STATUS_OK;
     }
-    SX1280_LOG_WARN("cmd 0x%02X timeout waiting for BUSY low (%s)", cmd, phase);
+    static uint64_t last_busy_warn_ms = 0u;
+    uint64_t now_ms = sx1280_now_ms();
+    if ((now_ms - last_busy_warn_ms) >= 300u) {
+        SX1280_LOG_WARN("cmd 0x%02X timeout waiting for BUSY low (%s)", cmd, phase);
+        last_busy_warn_ms = now_ms;
+    }
     return RADIO_STATUS_TIMEOUT;
 }
 
@@ -251,6 +284,11 @@ static radio_status_t sx1280_get_status_byte_direct(uint8_t *status) {
 
     if (read != (int)sizeof(tx)) {
         SX1280_LOG_ERROR("get_status SPI transfer failed");
+        return RADIO_STATUS_SPI_ERROR;
+    }
+
+    if ((rx[0] == 0xFFu) && (rx[1] == 0xFFu)) {
+        SX1280_LOG_ERROR("get_status returned 0xFFFF (no chip response on SPI)");
         return RADIO_STATUS_SPI_ERROR;
     }
 
@@ -331,6 +369,11 @@ static radio_status_t sx1280_write_cmd(uint8_t cmd, const uint8_t *data, size_t 
         return RADIO_STATUS_SPI_ERROR;
     }
 
+    if ((rx_buf[0] == 0xFFu) && ((len == 0u) || (rx_buf[1] == 0xFFu))) {
+        SX1280_LOG_ERROR("write_cmd(0x%02X) got 0xFF response (chip unresponsive)", cmd);
+        return RADIO_STATUS_SPI_ERROR;
+    }
+
 #if SX1280F27_LOG_LEVEL >= SX1280_LOG_LEVEL_TRACE
     if ((cmd == SX1280_CMD_SET_TX) || (cmd == SX1280_CMD_SET_RX) || (cmd == SX1280_CMD_SET_STANDBY)) {
         uint8_t st0 = rx_buf[0];
@@ -376,6 +419,11 @@ static radio_status_t sx1280_read_cmd(uint8_t cmd, uint8_t *out, size_t out_len)
 
     if (read != (int)((size_t)2u + out_len)) {
         SX1280_LOG_ERROR("read_cmd(0x%02X) SPI transfer failed len=%u", cmd, (unsigned)out_len);
+        return RADIO_STATUS_SPI_ERROR;
+    }
+
+    if ((rx_buf[0] == 0xFFu) && (rx_buf[1] == 0xFFu)) {
+        SX1280_LOG_ERROR("read_cmd(0x%02X) got 0xFF response (chip unresponsive)", cmd);
         return RADIO_STATUS_SPI_ERROR;
     }
 
@@ -611,11 +659,36 @@ static radio_status_t sx1280_set_frequency(uint32_t freq_hz) {
     return sx1280_write_cmd(SX1280_CMD_SET_RF_FREQUENCY, data, sizeof(data));
 }
 
-static radio_status_t sx1280_set_modulation_lora_profile_1(void) {
+static const sx1280_profile_cfg_t *sx1280_find_profile(uint8_t profile_id) {
+    for (size_t i = 0; i < (sizeof(g_sx1280_profiles) / sizeof(g_sx1280_profiles[0])); ++i) {
+        if (g_sx1280_profiles[i].profile_id == profile_id) {
+            return &g_sx1280_profiles[i];
+        }
+    }
+    return NULL;
+}
+
+static uint8_t sx1280_sf_cfg_reg_value(uint8_t sf_code) {
+    // DS_SX1280-1_V3.3: after SetModulationParams
+    // SF5/6 => 0x1E, SF7/8 => 0x37, SF9..12 => 0x32.
+    if ((sf_code == SX1280_LORA_SF_5) || (sf_code == SX1280_LORA_SF_6)) {
+        return 0x1Eu;
+    }
+    if ((sf_code == SX1280_LORA_SF_7) || (sf_code == SX1280_LORA_SF_8)) {
+        return 0x37u;
+    }
+    return 0x32u;
+}
+
+static radio_status_t sx1280_set_modulation_lora(const sx1280_profile_cfg_t *profile) {
+    if (profile == NULL) {
+        return RADIO_STATUS_INVALID_ARG;
+    }
+
     const uint8_t data[] = {
-        SX1280_LORA_SF_5,
-        SX1280_LORA_BW_203_125,
-        SX1280_LORA_CR_4_5
+        profile->sf_code,
+        profile->bw_code,
+        profile->cr_code
     };
 
     radio_status_t st = sx1280_write_cmd(SX1280_CMD_SET_MODULATION_PARAMS, data, sizeof(data));
@@ -623,8 +696,7 @@ static radio_status_t sx1280_set_modulation_lora_profile_1(void) {
         return st;
     }
 
-    // Required register writes for SX1280 LoRa SF5/SF6 operation.
-    const uint8_t sf_cfg = 0x1Eu;
+    const uint8_t sf_cfg = sx1280_sf_cfg_reg_value(profile->sf_code);
     st = sx1280_write_register(SX1280_REG_LORA_SF_CFG, &sf_cfg, 1u);
     if (st != RADIO_STATUS_OK) {
         SX1280_LOG_WARN("failed write reg 0x0925 st=%d", (int)st);
@@ -670,7 +742,12 @@ static radio_status_t sx1280_set_tx_params(int8_t dbm) {
     return sx1280_write_cmd(SX1280_CMD_SET_TX_PARAMS, data, sizeof(data));
 }
 
-static radio_status_t sx1280_apply_profile_1(void) {
+static radio_status_t sx1280_apply_active_profile(void) {
+    const sx1280_profile_cfg_t *profile = sx1280_find_profile(g_sx1280.rf_profile);
+    if (profile == NULL) {
+        return RADIO_STATUS_INVALID_ARG;
+    }
+
     const uint8_t packet_type = SX1280_PACKET_TYPE_LORA;
     const uint8_t buffer_base[] = {0x00, 0x00};
 
@@ -689,7 +766,7 @@ static radio_status_t sx1280_apply_profile_1(void) {
         return st;
     }
 
-    st = sx1280_set_modulation_lora_profile_1();
+    st = sx1280_set_modulation_lora(profile);
     if (st != RADIO_STATUS_OK) {
         return st;
     }
@@ -853,20 +930,51 @@ static radio_status_t sx1280_begin_wait_state(uint8_t cmd,
 
 radio_status_t sx1280f27_init(void) {
     sx1280_set_rf_switch_idle();
+    radio_status_t st = RADIO_STATUS_TIMEOUT;
+    for (uint8_t attempt = 0u; attempt < 3u; ++attempt) {
+        gpio_put(PIN_SBAND_RST, 1);
+        sleep_ms(1);
+        gpio_put(PIN_SBAND_RST, 0);
+        sleep_ms(20);
+        gpio_put(PIN_SBAND_RST, 1);
+        sleep_ms((attempt == 0u) ? 20u : 40u);
 
-    gpio_put(PIN_SBAND_RST, 1);
-    sleep_ms(1);
-    gpio_put(PIN_SBAND_RST, 0);
-    sleep_ms(20);
-    gpio_put(PIN_SBAND_RST, 1);
-    sleep_ms(20);
+        if (!sx1280_wait_while_busy(100u + (50u * attempt))) {
+            st = RADIO_STATUS_TIMEOUT;
+            SX1280_LOG_WARN("init: BUSY stayed high after reset attempt %u", (unsigned)(attempt + 1u));
+            continue;
+        }
 
-    if (!sx1280_wait_while_busy(100u)) {
-        g_sx1280.state = SX1280_STATE_ERROR;
-        return RADIO_STATUS_TIMEOUT;
+        // After reset, some modules need a brief SPI "warm-up" before commands
+        // return valid status bytes.
+        uint8_t probe_status = 0u;
+        radio_status_t probe_st = RADIO_STATUS_SPI_ERROR;
+        for (uint8_t probe_try = 0u; probe_try < 8u; ++probe_try) {
+            probe_st = sx1280_get_status_byte_direct(&probe_status);
+            if ((probe_st == RADIO_STATUS_OK) && (probe_status != 0x00u) && (probe_status != 0xFFu)) {
+                break;
+            }
+            sleep_ms(2);
+        }
+        if (probe_st != RADIO_STATUS_OK) {
+            st = probe_st;
+            SX1280_LOG_WARN("init: status probe attempt %u failed st=%d", (unsigned)(attempt + 1u), (int)st);
+            continue;
+        }
+
+        st = RADIO_STATUS_SPI_ERROR;
+        for (uint8_t cmd_try = 0u; cmd_try < 3u; ++cmd_try) {
+            st = sx1280_set_standby();
+            if (st == RADIO_STATUS_OK) {
+                break;
+            }
+            sleep_ms(2);
+        }
+        if (st == RADIO_STATUS_OK) {
+            break;
+        }
+        SX1280_LOG_WARN("init: standby attempt %u failed st=%d", (unsigned)(attempt + 1u), (int)st);
     }
-
-    radio_status_t st = sx1280_set_standby();
     if (st != RADIO_STATUS_OK) {
         g_sx1280.state = SX1280_STATE_ERROR;
         return st;
@@ -877,7 +985,7 @@ radio_status_t sx1280f27_init(void) {
     g_sx1280.state = SX1280_STATE_IDLE;
     g_sx1280.initialized = true;
 
-    st = sx1280_apply_profile_1();
+    st = sx1280_apply_active_profile();
     if (st != RADIO_STATUS_OK) {
         g_sx1280.state = SX1280_STATE_ERROR;
         g_sx1280.initialized = false;
@@ -977,7 +1085,7 @@ radio_status_t sx1280f27_set_profile(uint8_t rf_profile) {
     if (st != RADIO_STATUS_OK) {
         return st;
     }
-    if (rf_profile != 1u) {
+    if (sx1280_find_profile(rf_profile) == NULL) {
         return RADIO_STATUS_INVALID_ARG;
     }
     if ((g_sx1280.state == SX1280_STATE_TX_WAIT) || (g_sx1280.state == SX1280_STATE_RX_WAIT)) {
@@ -985,7 +1093,7 @@ radio_status_t sx1280f27_set_profile(uint8_t rf_profile) {
     }
 
     g_sx1280.rf_profile = rf_profile;
-    return sx1280_apply_profile_1();
+    return sx1280_apply_active_profile();
 }
 
 radio_status_t sx1280f27_set_tx_power_dbm(int8_t dbm) {

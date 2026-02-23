@@ -115,3 +115,127 @@ target_link_libraries(UsbConsoleSanityTest
         )
 
 pico_add_extra_outputs(UsbConsoleSanityTest)
+
+add_executable(RangeTestNode
+        src/tests/range_test_node.c
+        src/hal/board_pins.c
+        src/radio/radio_sx1280f27.c
+        src/radio/radio_rfm98pw.c
+        )
+
+pico_set_program_name(RangeTestNode "RangeTestNode")
+pico_set_program_version(RangeTestNode "0.1")
+
+pico_generate_pio_header(RangeTestNode ${CMAKE_CURRENT_LIST_DIR}/pio/ws2812.pio)
+
+pico_enable_stdio_uart(RangeTestNode 0)
+pico_enable_stdio_usb(RangeTestNode 1)
+
+target_link_libraries(RangeTestNode
+        pico_stdlib
+        hardware_spi
+        hardware_pio
+        hardware_timer
+        hardware_watchdog
+        )
+
+target_include_directories(RangeTestNode PRIVATE
+        ${CMAKE_CURRENT_LIST_DIR}/include
+)
+
+target_compile_definitions(RangeTestNode PRIVATE SX1280F27_LOG_LEVEL=2)
+
+pico_add_extra_outputs(RangeTestNode)
+
+add_executable(RangeTestNodeA
+        src/tests/range_test_node.c
+        src/hal/board_pins.c
+        src/radio/radio_sx1280f27.c
+        src/radio/radio_rfm98pw.c
+        )
+
+target_compile_definitions(RangeTestNodeA PRIVATE RANGE_NODE_FORCE_ROLE=1 SX1280F27_LOG_LEVEL=2)
+
+pico_set_program_name(RangeTestNodeA "RangeTestNodeA")
+pico_set_program_version(RangeTestNodeA "0.1")
+
+pico_generate_pio_header(RangeTestNodeA ${CMAKE_CURRENT_LIST_DIR}/pio/ws2812.pio)
+
+pico_enable_stdio_uart(RangeTestNodeA 0)
+pico_enable_stdio_usb(RangeTestNodeA 1)
+
+target_link_libraries(RangeTestNodeA
+        pico_stdlib
+        hardware_spi
+        hardware_pio
+        hardware_timer
+        hardware_watchdog
+        )
+
+target_include_directories(RangeTestNodeA PRIVATE
+        ${CMAKE_CURRENT_LIST_DIR}/include
+)
+
+pico_add_extra_outputs(RangeTestNodeA)
+
+add_executable(RangeTestNodeB
+        src/tests/range_test_node.c
+        src/hal/board_pins.c
+        src/radio/radio_sx1280f27.c
+        src/radio/radio_rfm98pw.c
+        )
+
+target_compile_definitions(RangeTestNodeB PRIVATE RANGE_NODE_FORCE_ROLE=2 SX1280F27_LOG_LEVEL=2)
+
+pico_set_program_name(RangeTestNodeB "RangeTestNodeB")
+pico_set_program_version(RangeTestNodeB "0.1")
+
+pico_generate_pio_header(RangeTestNodeB ${CMAKE_CURRENT_LIST_DIR}/pio/ws2812.pio)
+
+pico_enable_stdio_uart(RangeTestNodeB 0)
+pico_enable_stdio_usb(RangeTestNodeB 1)
+
+target_link_libraries(RangeTestNodeB
+        pico_stdlib
+        hardware_spi
+        hardware_pio
+        hardware_timer
+        hardware_watchdog
+        )
+
+target_include_directories(RangeTestNodeB PRIVATE
+        ${CMAKE_CURRENT_LIST_DIR}/include
+)
+
+pico_add_extra_outputs(RangeTestNodeB)
+
+add_executable(RangeTestObserver
+        src/tests/range_test_node.c
+        src/hal/board_pins.c
+        src/radio/radio_sx1280f27.c
+        src/radio/radio_rfm98pw.c
+        )
+
+target_compile_definitions(RangeTestObserver PRIVATE RANGE_NODE_FORCE_ROLE=3 SX1280F27_LOG_LEVEL=2)
+
+pico_set_program_name(RangeTestObserver "RangeTestObserver")
+pico_set_program_version(RangeTestObserver "0.1")
+
+pico_generate_pio_header(RangeTestObserver ${CMAKE_CURRENT_LIST_DIR}/pio/ws2812.pio)
+
+pico_enable_stdio_uart(RangeTestObserver 0)
+pico_enable_stdio_usb(RangeTestObserver 1)
+
+target_link_libraries(RangeTestObserver
+        pico_stdlib
+        hardware_spi
+        hardware_pio
+        hardware_timer
+        hardware_watchdog
+        )
+
+target_include_directories(RangeTestObserver PRIVATE
+        ${CMAKE_CURRENT_LIST_DIR}/include
+)
+
+pico_add_extra_outputs(RangeTestObserver)
