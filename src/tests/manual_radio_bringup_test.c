@@ -25,8 +25,15 @@ typedef enum {
     RUN_RX_ONLY
 } run_mode_t;
 
-#define SBAND_BRINGUP_TX_DBM (10)
-#define UHF_BRINGUP_TX_DBM (2)
+typedef enum {
+    POWER_PRESET_LOW = 0,
+    POWER_PRESET_HIGH
+} power_preset_t;
+
+#define SBAND_TX_DBM_LOW (10)
+#define SBAND_TX_DBM_HIGH (13)
+#define UHF_TX_DBM_LOW (2)
+#define UHF_TX_DBM_HIGH (20)
 #define SBAND_TX_OK_PULSE_MS (150)
 
 static uint32_t urgb_u32(uint8_t r, uint8_t g, uint8_t b) {
@@ -86,6 +93,10 @@ static const char *mode_to_str(run_mode_t mode) {
     }
 }
 
+static const char *power_preset_to_str(power_preset_t preset) {
+    return (preset == POWER_PRESET_HIGH) ? "HIGH" : "LOW";
+}
+
 static void log_status(const char *tag, radio_status_t st) {
     if (st != RADIO_STATUS_OK) {
         printf("[%s] status=%d\n", tag, (int)st);
@@ -102,27 +113,49 @@ static void print_help(void) {
     printf("  b: force S-band radio\n");
     printf("  u: force UHF radio\n");
     printf("  a: auto-select radio (S-band first, then UHF)\n");
+    printf("  h: use HIGH TX power preset\n");
+    printf("  l: use LOW TX power preset\n");
     printf("  s: print status\n");
     printf("  r: re-init radio\n");
-    printf("  h or ?: show this help\n\n");
+    printf("  ?: show this help\n\n");
 }
 
-static void print_status(run_mode_t mode, bool tx_phase, bool op_active, test_radio_t radio) {
-    printf("[status] mode=%s phase=%s op_active=%d radio=%s busy=%d sband_dio1=%d uhf_dio0=%d\n",
+static int8_t tx_power_for_radio(test_radio_t radio, power_preset_t preset) {
+    if (radio == TEST_RADIO_SBAND) {
+        return (preset == POWER_PRESET_HIGH) ? (int8_t)SBAND_TX_DBM_HIGH : (int8_t)SBAND_TX_DBM_LOW;
+    }
+    return (preset == POWER_PRESET_HIGH) ? (int8_t)UHF_TX_DBM_HIGH : (int8_t)UHF_TX_DBM_LOW;
+}
+
+static void print_status(run_mode_t mode, bool tx_phase, bool op_active, test_radio_t radio, power_preset_t preset) {
+    printf("[status] mode=%s phase=%s op_active=%d radio=%s power=%s tx_dbm=%d busy=%d sband_dio1=%d uhf_dio0=%d\n",
            mode_to_str(mode),
            tx_phase ? "TX" : "RX",
            op_active ? 1 : 0,
            radio_to_str(radio),
+           power_preset_to_str(preset),
+           (int)tx_power_for_radio(radio, preset),
            gpio_get(PIN_SBAND_BUSY),
            gpio_get(PIN_SBAND_DIO1),
            gpio_get(PIN_UHF_DIO0));
 }
 
-static test_radio_t init_any_radio(void) {
+static radio_status_t apply_radio_tx_power(test_radio_t radio, power_preset_t preset) {
+    int8_t dbm = tx_power_for_radio(radio, preset);
+    if (radio == TEST_RADIO_SBAND) {
+        return sx1280f27_set_tx_power_dbm(dbm);
+    }
+    if (radio == TEST_RADIO_UHF) {
+        return rfm98pw_set_tx_power_dbm(dbm);
+    }
+    return RADIO_STATUS_NOT_READY;
+}
+
+static test_radio_t init_any_radio(power_preset_t preset) {
     radio_status_t st = sx1280f27_init();
     if (st == RADIO_STATUS_OK) {
         (void)sx1280f27_set_profile(1u);
-        (void)sx1280f27_set_tx_power_dbm(SBAND_BRINGUP_TX_DBM);
+        (void)apply_radio_tx_power(TEST_RADIO_SBAND, preset);
         printf("Using SX1280 S-band radio.\n");
         return TEST_RADIO_SBAND;
     }
@@ -131,7 +164,7 @@ static test_radio_t init_any_radio(void) {
     st = rfm98pw_init();
     if (st == RADIO_STATUS_OK) {
         (void)rfm98pw_set_profile(1u);
-        (void)rfm98pw_set_tx_power_dbm(UHF_BRINGUP_TX_DBM);
+        (void)apply_radio_tx_power(TEST_RADIO_UHF, preset);
         printf("Using RFM98 UHF radio.\n");
         return TEST_RADIO_UHF;
     }
@@ -139,26 +172,26 @@ static test_radio_t init_any_radio(void) {
     return TEST_RADIO_NONE;
 }
 
-static test_radio_t init_sband_only(void) {
+static test_radio_t init_sband_only(power_preset_t preset) {
     radio_status_t st = sx1280f27_init();
     if (st != RADIO_STATUS_OK) {
         printf("SX1280 init failed (%d).\n", (int)st);
         return TEST_RADIO_NONE;
     }
     (void)sx1280f27_set_profile(1u);
-    (void)sx1280f27_set_tx_power_dbm(SBAND_BRINGUP_TX_DBM);
+    (void)apply_radio_tx_power(TEST_RADIO_SBAND, preset);
     printf("Using SX1280 S-band radio.\n");
     return TEST_RADIO_SBAND;
 }
 
-static test_radio_t init_uhf_only(void) {
+static test_radio_t init_uhf_only(power_preset_t preset) {
     radio_status_t st = rfm98pw_init();
     if (st != RADIO_STATUS_OK) {
         printf("RFM98 init failed (%d).\n", (int)st);
         return TEST_RADIO_NONE;
     }
     (void)rfm98pw_set_profile(1u);
-    (void)rfm98pw_set_tx_power_dbm(UHF_BRINGUP_TX_DBM);
+    (void)apply_radio_tx_power(TEST_RADIO_UHF, preset);
     printf("Using RFM98 UHF radio.\n");
     return TEST_RADIO_UHF;
 }
@@ -252,6 +285,7 @@ int main(void) {
     bool sband_tx_ok_pulse_latched = false;
     absolute_time_t sband_tx_ok_pulse_deadline = get_absolute_time();
     absolute_time_t status_next_print = delayed_by_ms(get_absolute_time(), 1000);
+    power_preset_t power_preset = POWER_PRESET_HIGH;
 
     while (true) {
         int ch = getchar_timeout_us(0);
@@ -276,7 +310,11 @@ int main(void) {
                 tx_phase = true;
                 op_active = false;
                 radio_abort(radio);
-                printf("Mode set: TX_ONLY\n");
+                radio_status_t pwr_st = apply_radio_tx_power(radio, power_preset);
+                log_status("set_tx_power", pwr_st);
+                printf("Mode set: TX_ONLY (%s power %d dBm)\n",
+                       power_preset_to_str(power_preset),
+                       (int)tx_power_for_radio(radio, power_preset));
             } else if (ch == '3') {
                 if (radio == TEST_RADIO_NONE) {
                     printf("No radio selected. Press 'b' (S-band), 'u' (UHF), or 'a' (auto).\n");
@@ -299,34 +337,50 @@ int main(void) {
                 stop_all_radios();
                 radio = TEST_RADIO_NONE;
                 printf("HARD STOP: all radios aborted and deselected.\n");
-                print_status(mode, tx_phase, op_active, radio);
+                print_status(mode, tx_phase, op_active, radio, power_preset);
             } else if (ch == 'b' || ch == 'B') {
                 mode = RUN_STOPPED;
                 op_active = false;
                 radio_abort(radio);
-                radio = init_sband_only();
-                print_status(mode, tx_phase, op_active, radio);
+                radio = init_sband_only(power_preset);
+                print_status(mode, tx_phase, op_active, radio, power_preset);
             } else if (ch == 'u' || ch == 'U') {
                 mode = RUN_STOPPED;
                 op_active = false;
                 radio_abort(radio);
-                radio = init_uhf_only();
-                print_status(mode, tx_phase, op_active, radio);
+                radio = init_uhf_only(power_preset);
+                print_status(mode, tx_phase, op_active, radio, power_preset);
             } else if (ch == 'a' || ch == 'A') {
                 mode = RUN_STOPPED;
                 op_active = false;
                 radio_abort(radio);
-                radio = init_any_radio();
-                print_status(mode, tx_phase, op_active, radio);
+                radio = init_any_radio(power_preset);
+                print_status(mode, tx_phase, op_active, radio, power_preset);
+            } else if (ch == 'h' || ch == 'H') {
+                power_preset = POWER_PRESET_HIGH;
+                if (radio != TEST_RADIO_NONE) {
+                    radio_status_t pwr_st = apply_radio_tx_power(radio, power_preset);
+                    log_status("set_tx_power", pwr_st);
+                }
+                printf("Power preset set: %s\n", power_preset_to_str(power_preset));
+                print_status(mode, tx_phase, op_active, radio, power_preset);
+            } else if (ch == 'l' || ch == 'L') {
+                power_preset = POWER_PRESET_LOW;
+                if (radio != TEST_RADIO_NONE) {
+                    radio_status_t pwr_st = apply_radio_tx_power(radio, power_preset);
+                    log_status("set_tx_power", pwr_st);
+                }
+                printf("Power preset set: %s\n", power_preset_to_str(power_preset));
+                print_status(mode, tx_phase, op_active, radio, power_preset);
             } else if (ch == 's' || ch == 'S') {
-                print_status(mode, tx_phase, op_active, radio);
+                print_status(mode, tx_phase, op_active, radio, power_preset);
             } else if (ch == 'r' || ch == 'R') {
                 mode = RUN_STOPPED;
                 op_active = false;
                 radio_abort(radio);
-                radio = init_any_radio();
-                print_status(mode, tx_phase, op_active, radio);
-            } else if (ch == 'h' || ch == 'H' || ch == '?') {
+                radio = init_any_radio(power_preset);
+                print_status(mode, tx_phase, op_active, radio, power_preset);
+            } else if (ch == '?') {
                 print_help();
             }
         }
@@ -363,7 +417,7 @@ int main(void) {
         }
 
         if (absolute_time_diff_us(get_absolute_time(), status_next_print) <= 0) {
-            print_status(mode, tx_phase, op_active, radio);
+            print_status(mode, tx_phase, op_active, radio, power_preset);
             status_next_print = delayed_by_ms(get_absolute_time(), 1000);
         }
 
@@ -386,7 +440,7 @@ int main(void) {
                     pkt.test_id = 1u;
                     pkt.packet_number = packet_counter++;
                     pkt.uptime_ms = to_ms_since_boot(get_absolute_time());
-                    pkt.tx_power_dbm = (radio == TEST_RADIO_SBAND) ? SBAND_BRINGUP_TX_DBM : UHF_BRINGUP_TX_DBM;
+                    pkt.tx_power_dbm = tx_power_for_radio(radio, power_preset);
                     pkt.rf_profile = 1u;
                     pkt.local_rssi_dbm_x100 = RANGE_INVALID_RSSI_DBM_X100;
                     pkt.local_snr_db_x100 = RANGE_INVALID_SNR_DB_X100;
@@ -440,6 +494,7 @@ int main(void) {
             }
         }
 
-        sleep_ms(5);
+        // Keep loop tight in TX-only mode to maximize packet throughput.
+        sleep_ms((mode == RUN_TX_ONLY) ? 1 : 5);
     }
 }
