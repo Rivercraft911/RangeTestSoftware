@@ -116,6 +116,30 @@ target_link_libraries(UsbConsoleSanityTest
 
 pico_add_extra_outputs(UsbConsoleSanityTest)
 
+add_executable(UHFConstantFullPowerTx
+        src/tests/uhf_constant_full_power_tx.c
+        src/hal/board_pins.c
+        src/radio/radio_rfm98pw.c
+        )
+
+pico_set_program_name(UHFConstantFullPowerTx "UHFConstantFullPowerTx")
+pico_set_program_version(UHFConstantFullPowerTx "0.1")
+
+pico_enable_stdio_uart(UHFConstantFullPowerTx 0)
+pico_enable_stdio_usb(UHFConstantFullPowerTx 1)
+
+target_link_libraries(UHFConstantFullPowerTx
+        pico_stdlib
+        hardware_spi
+        hardware_timer
+        )
+
+target_include_directories(UHFConstantFullPowerTx PRIVATE
+        ${CMAKE_CURRENT_LIST_DIR}/include
+)
+
+pico_add_extra_outputs(UHFConstantFullPowerTx)
+
 add_executable(RangeTestNode
         src/tests/range_test_node.c
         src/hal/board_pins.c

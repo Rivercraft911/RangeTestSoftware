@@ -4,12 +4,7 @@ import csv
 import datetime as dt
 import sys
 from collections import defaultdict
-
-try:
-    import serial
-except ImportError:
-    print("pyserial is required. Install with: pip install pyserial", file=sys.stderr)
-    sys.exit(1)
+import serial
 
 
 def parse_kv_line(line: str):
