@@ -196,7 +196,7 @@ def main():
             snr = to_int(data, "snr_mean_x100", 0) / 100.0
 
             row = {
-                "ts_utc": dt.datetime.utcnow().isoformat(timespec="seconds") + "Z",
+                "ts_utc": dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
                 "test_id": to_int(data, "test_id", 0),
                 "window_id": to_int(data, "window_id", 0),
                 "band": data.get("band", ""),

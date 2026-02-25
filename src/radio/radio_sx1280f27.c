@@ -1141,6 +1141,12 @@ radio_status_t sx1280f27_start_tx(const uint8_t *payload, uint8_t length, uint32
         return st;
     }
 
+    st = sx1280_set_packet_params_lora(length);
+    if (st != RADIO_STATUS_OK) {
+        g_sx1280.state = SX1280_STATE_ERROR;
+        return st;
+    }
+
     uint8_t tx_data[1u + 255u];
     tx_data[0] = 0x00u;
     memcpy(&tx_data[1], payload, length);
