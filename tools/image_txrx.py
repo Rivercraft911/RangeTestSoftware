@@ -6,10 +6,14 @@ LoRa S-Band image transfer tool.
 River Dowdy - Winter 2025
 """
 import argparse
+import io
 import serial
 import sys
 import time
 from pathlib import Path
+from PIL import Image, ImageFile
+
+ImageFile.LOAD_TRUNCATED_IMAGES = True
 
 IMAGE_DATA_PER_PKT = 245
 
@@ -152,16 +156,8 @@ def _reassemble(received, total_pkts):
 
 
 def _display(jpeg_bytes):
-    try:
-        from PIL import Image, ImageFile
-        import io
-        ImageFile.LOAD_TRUNCATED_IMAGES = True
-        img = Image.open(io.BytesIO(jpeg_bytes))
-        img.show()
-    except ImportError:
-        print("  Install Pillow to auto-display: pip install Pillow")
-    except Exception as e:
-        print(f"  Display failed: {e}")
+    img = Image.open(io.BytesIO(jpeg_bytes))
+    img.show()
 
 
 def _read_line(ser, timeout=5):
