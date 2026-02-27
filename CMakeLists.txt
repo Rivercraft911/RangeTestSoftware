@@ -266,3 +266,29 @@ target_include_directories(RangeTestObserver PRIVATE
 )
 
 pico_add_extra_outputs(RangeTestObserver)
+
+add_executable(ImageTransfer
+        src/tests/image_transfer.c
+        src/hal/board_pins.c
+        src/radio/radio_sx1280f27.c
+        )
+
+target_compile_definitions(ImageTransfer PRIVATE SX1280F27_LOG_LEVEL=2)
+
+pico_set_program_name(ImageTransfer "ImageTransfer")
+pico_set_program_version(ImageTransfer "0.1")
+
+pico_enable_stdio_uart(ImageTransfer 0)
+pico_enable_stdio_usb(ImageTransfer 1)
+
+target_link_libraries(ImageTransfer
+        pico_stdlib
+        hardware_spi
+        hardware_timer
+        )
+
+target_include_directories(ImageTransfer PRIVATE
+        ${CMAKE_CURRENT_LIST_DIR}/include
+)
+
+pico_add_extra_outputs(ImageTransfer)
