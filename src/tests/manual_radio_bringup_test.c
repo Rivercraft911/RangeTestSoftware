@@ -35,6 +35,7 @@ typedef enum {
 #define UHF_TX_DBM_LOW (2)
 #define UHF_TX_DBM_HIGH (20)
 #define SBAND_TX_OK_PULSE_MS (150)
+#define TX_REARM_DELAY_MS (30u)
 
 static uint32_t urgb_u32(uint8_t r, uint8_t g, uint8_t b) {
     return ((uint32_t)r << 8) | ((uint32_t)g << 16) | b;
@@ -284,6 +285,7 @@ int main(void) {
     bool sband_tx_ok_pulse_active = false;
     bool sband_tx_ok_pulse_latched = false;
     absolute_time_t sband_tx_ok_pulse_deadline = get_absolute_time();
+    absolute_time_t next_tx_allowed = get_absolute_time();
     absolute_time_t status_next_print = delayed_by_ms(get_absolute_time(), 1000);
     power_preset_t power_preset = POWER_PRESET_HIGH;
 
@@ -431,33 +433,37 @@ int main(void) {
 
             if (!op_active) {
                 if (do_tx) {
-                    range_packet_t pkt;
-                    memset(&pkt, 0, sizeof(pkt));
-                    pkt.version = RANGE_PACKET_VERSION;
-                    pkt.msg_type = RANGE_MSG_TRANSMIT;
-                    pkt.role = RANGE_ROLE_TRANSMITTER;
-                    pkt.radio = (radio == TEST_RADIO_SBAND) ? RANGE_RADIO_SBAND : RANGE_RADIO_UHF;
-                    pkt.test_id = 1u;
-                    pkt.packet_number = packet_counter++;
-                    pkt.uptime_ms = to_ms_since_boot(get_absolute_time());
-                    pkt.tx_power_dbm = tx_power_for_radio(radio, power_preset);
-                    pkt.rf_profile = 1u;
-                    pkt.local_rssi_dbm_x100 = RANGE_INVALID_RSSI_DBM_X100;
-                    pkt.local_snr_db_x100 = RANGE_INVALID_SNR_DB_X100;
-                    pkt.remote_rssi_dbm_x100 = RANGE_INVALID_RSSI_DBM_X100;
-                    pkt.remote_snr_db_x100 = RANGE_INVALID_SNR_DB_X100;
-                    pkt.payload_crc16 = 0u;
+                    if (absolute_time_diff_us(get_absolute_time(), next_tx_allowed) <= 0) {
+                        range_packet_t pkt;
+                        memset(&pkt, 0, sizeof(pkt));
+                        pkt.version = RANGE_PACKET_VERSION;
+                        pkt.msg_type = RANGE_MSG_TRANSMIT;
+                        pkt.role = RANGE_ROLE_TRANSMITTER;
+                        pkt.radio = (radio == TEST_RADIO_SBAND) ? RANGE_RADIO_SBAND : RANGE_RADIO_UHF;
+                        pkt.test_id = 1u;
+                        pkt.packet_number = packet_counter++;
+                        pkt.uptime_ms = to_ms_since_boot(get_absolute_time());
+                        pkt.tx_power_dbm = tx_power_for_radio(radio, power_preset);
+                        pkt.rf_profile = 1u;
+                        pkt.local_rssi_dbm_x100 = RANGE_INVALID_RSSI_DBM_X100;
+                        pkt.local_snr_db_x100 = RANGE_INVALID_SNR_DB_X100;
+                        pkt.remote_rssi_dbm_x100 = RANGE_INVALID_RSSI_DBM_X100;
+                        pkt.remote_snr_db_x100 = RANGE_INVALID_SNR_DB_X100;
+                        pkt.payload_crc16 = 0u;
 
-                    radio_status_t st = radio_start_tx(radio, (const uint8_t *)&pkt, (uint8_t)sizeof(pkt), 1000u);
-                    log_status("start_tx", st);
-                    if (st == RADIO_STATUS_OK) {
-                        printf("[TX] started radio=%s power_dbm=%d packet=%lu len=%u\n",
-                               radio_to_str(radio),
-                               (int)pkt.tx_power_dbm,
-                               (unsigned long)pkt.packet_number,
-                               (unsigned)sizeof(pkt));
+                        radio_status_t st = radio_start_tx(radio, (const uint8_t *)&pkt, (uint8_t)sizeof(pkt), 1000u);
+                        log_status("start_tx", st);
+                        if (st == RADIO_STATUS_OK) {
+                            printf("[TX] started radio=%s power_dbm=%d packet=%lu len=%u\n",
+                                   radio_to_str(radio),
+                                   (int)pkt.tx_power_dbm,
+                                   (unsigned long)pkt.packet_number,
+                                   (unsigned)sizeof(pkt));
+                        } else {
+                            next_tx_allowed = delayed_by_ms(get_absolute_time(), TX_REARM_DELAY_MS);
+                        }
+                        op_active = (st == RADIO_STATUS_OK);
                     }
-                    op_active = (st == RADIO_STATUS_OK);
                 } else {
                     radio_status_t st = radio_start_rx(radio, 250u);
                     log_status("start_rx", st);
@@ -473,6 +479,9 @@ int main(void) {
             if (st != RADIO_STATUS_OK) {
                 printf("[poll] status=%d\n", (int)st);
                 radio_abort(radio);
+                if (do_tx) {
+                    next_tx_allowed = delayed_by_ms(get_absolute_time(), TX_REARM_DELAY_MS);
+                }
                 op_active = false;
             } else if (event != RADIO_EVENT_NONE) {
                 printf("[%s] event=%s\n", tx_phase ? "TX" : "RX", event_to_str(event));
@@ -490,11 +499,14 @@ int main(void) {
                     sband_tx_ok_pulse_latched = false;
                     sband_tx_ok_pulse_deadline = delayed_by_ms(get_absolute_time(), SBAND_TX_OK_PULSE_MS);
                 }
+                if (do_tx) {
+                    next_tx_allowed = delayed_by_ms(get_absolute_time(), TX_REARM_DELAY_MS);
+                }
                 op_active = false;
             }
         }
 
-        // Keep loop tight in TX-only mode to maximize packet throughput.
+        // Keep polling responsive while adding thermal headroom between TX bursts.
         sleep_ms((mode == RUN_TX_ONLY) ? 1 : 5);
     }
 }

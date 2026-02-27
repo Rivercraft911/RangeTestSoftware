@@ -37,7 +37,8 @@
 #define PIN_UHF_RST 21u
 #define PIN_UHF_DIO0 28u
 
-#define RADIO_SPI_BAUD_HZ 1000000u
+#define UHF_SPI_BAUD_HZ 1000000u
+#define SBAND_SPI_BAUD_HZ 8000000u
 
 void board_pins_init(void);
 

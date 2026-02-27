@@ -1248,6 +1248,7 @@ radio_status_t sx1280f27_poll_event(radio_event_t *event) {
     }
 
     bool active_wait = (g_sx1280.state == SX1280_STATE_TX_WAIT) || (g_sx1280.state == SX1280_STATE_RX_WAIT);
+    static uint64_t last_tx_done_probe_ms = 0u;
 
     if (active_wait && sx1280_deadline_expired(g_sx1280.deadline_ms)) {
         sx1280_log_status_snapshot("poll deadline expired");
@@ -1257,6 +1258,26 @@ radio_status_t sx1280f27_poll_event(radio_event_t *event) {
     }
 
     if (!active_wait) {
+        return RADIO_STATUS_OK;
+    }
+
+    // DIO1 is the IRQ line configured for TX_DONE/RX_DONE/TIMEOUT/CRC_ERROR.
+    // Skip SPI IRQ-status transactions while the line is low.
+    if (gpio_get(PIN_SBAND_DIO1) == 0) {
+        // Retain a low-rate TX_DONE fallback so a missed IRQ edge does not wedge TX wait forever.
+        if (g_sx1280.state == SX1280_STATE_TX_WAIT) {
+            uint64_t now = sx1280_now_ms();
+            if ((now - last_tx_done_probe_ms) >= 250u) {
+                uint8_t status = 0u;
+                if ((sx1280_get_status_byte(&status) == RADIO_STATUS_OK) && (sx1280_status_cmd(status) == 0x06u)) {
+                    SX1280_LOG_WARN("poll: inferred TX_DONE from status=0x%02X with DIO1 low", status);
+                    sx1280_enter_idle_with_irq_clear();
+                    *event = RADIO_EVENT_TX_DONE;
+                    return RADIO_STATUS_OK;
+                }
+                last_tx_done_probe_ms = now;
+            }
+        }
         return RADIO_STATUS_OK;
     }
 

@@ -9,6 +9,7 @@
 #define BOOT_DELAY_MS (10000u)
 #define UHF_TX_POWER_DBM (20)
 #define TX_TIMEOUT_MS (1000u)
+#define TX_REARM_DELAY_MS (40u)
 #define PAYLOAD_LEN (32u)
 
 static void build_payload(uint8_t *payload, uint8_t len, uint32_t seq) {
@@ -57,7 +58,7 @@ int main(void) {
         }
     }
 
-    printf("TX started: UHF full power=%d dBm, continuous mode.\n", UHF_TX_POWER_DBM);
+    printf("TX started: UHF full power=%d dBm, duty-limited mode.\n", UHF_TX_POWER_DBM);
 
     uint32_t seq = 0u;
     uint8_t payload[PAYLOAD_LEN];
@@ -98,6 +99,6 @@ int main(void) {
         if ((seq % 100u) == 0u) {
             printf("tx_count=%lu\n", (unsigned long)seq);
         }
+        sleep_ms(TX_REARM_DELAY_MS);
     }
 }
-
