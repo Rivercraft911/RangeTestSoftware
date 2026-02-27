@@ -8,7 +8,8 @@
 typedef enum {
     IMAGE_PKT_START = 0x01u,
     IMAGE_PKT_DATA  = 0x02u,
-    IMAGE_PKT_END   = 0x03u
+    IMAGE_PKT_END   = 0x03u,
+    IMAGE_PKT_NACK  = 0x04u
 } image_pkt_type_t;
 
 #define IMAGE_HEADER_SIZE   8u
