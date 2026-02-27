@@ -37,6 +37,7 @@ pico_sdk_init()
 
 add_executable(RangeTestSoftware
         RangeTestSoftware.c
+        src/tests/range_test_node.c
         src/hal/board_pins.c
         src/radio/radio_sx1280f27.c
         src/radio/radio_rfm98pw.c
@@ -45,8 +46,10 @@ add_executable(RangeTestSoftware
 pico_set_program_name(RangeTestSoftware "RangeTestSoftware")
 pico_set_program_version(RangeTestSoftware "0.1")
 
+target_compile_definitions(RangeTestSoftware PRIVATE RANGE_NODE_NO_MAIN SX1280F27_LOG_LEVEL=2)
+
 # Generate PIO header
-pico_generate_pio_header(RangeTestSoftware ${CMAKE_CURRENT_LIST_DIR}/pio/blink.pio)
+pico_generate_pio_header(RangeTestSoftware ${CMAKE_CURRENT_LIST_DIR}/pio/ws2812.pio)
 
 # Modify the below lines to enable/disable output over UART/USB
 pico_enable_stdio_uart(RangeTestSoftware 0)
