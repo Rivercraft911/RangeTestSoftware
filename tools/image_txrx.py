@@ -1,56 +1,63 @@
 """
 LoRa S-Band image transfer tool.
-  send    - Stream a JPEG to the TX Pico over serial
-  receive - Reassemble and display an image from the RX Pico
-
 River Dowdy - Winter 2025
+
+Dependencies: pip install pyserial Pillow
 """
-import argparse
 import io
-import serial
 import sys
 import time
 from pathlib import Path
+
+import serial
 from PIL import Image, ImageFile
 
 ImageFile.LOAD_TRUNCATED_IMAGES = True
 
 IMAGE_DATA_PER_PKT = 245
 
+BANNER = r"""
+ _     _   _                    ______    ______     _ __                      ______
+' )   /   //                      /         //      ' )  )                       /      _/_
+ / / /_  // _. __ ______  _    --/__     --//_  _    /--' __.  ____  _,  _    --/_  _   /
+(_(_/</_</_(__(_)/ / / <_</_  (_/(_)    (_// /_</_  /  \_(_/|_/ / <_(_)_</_  (_/</_/_)_<__
+                                                                     /|
+                                                                    |/
+"""
 
-def cmd_send(args):
-    data = Path(args.image).read_bytes()
+
+def cmd_send(port, baud):
+    image_path = input("Image path: ").strip().strip('"').strip("'")
+    if not Path(image_path).exists():
+        print(f"File not found: {image_path}")
+        return
+
+    data = Path(image_path).read_bytes()
     total_pkts = (len(data) + IMAGE_DATA_PER_PKT - 1) // IMAGE_DATA_PER_PKT
+    print(f"Image: {image_path} ({len(data)} bytes, {total_pkts} packets)")
 
-    print(f"Image: {args.image} ({len(data)} bytes, {total_pkts} packets)")
-
-    ser = serial.Serial(args.port, args.baud, timeout=5)
+    ser = serial.Serial(port, baud, timeout=5)
     time.sleep(0.5)
     ser.reset_input_buffer()
 
-    # Send start command
     ser.write(f"IMG_SEND,total_bytes={len(data)},total_pkts={total_pkts}\n".encode())
 
-    # Wait for ACK
     if not _wait_for(ser, "IMG_ACK,ready"):
-        print("Error: no ready ACK from Pico", file=sys.stderr)
+        print("Error: no ready ACK from Pico")
         return
 
     print("Pico ready, sending...")
 
-    # Stream chunks
     for i in range(total_pkts):
         offset = i * IMAGE_DATA_PER_PKT
         chunk = data[offset:offset + IMAGE_DATA_PER_PKT]
         hex_str = chunk.hex().upper()
 
-        line = f"IMG_CHUNK,pkt={i},len={len(chunk)},hex={hex_str}\n"
-        ser.write(line.encode())
+        ser.write(f"IMG_CHUNK,pkt={i},len={len(chunk)},hex={hex_str}\n".encode())
 
-        # Wait for ACK
         resp = _read_line(ser, timeout=10)
         if resp is None:
-            print(f"\nError: timeout waiting for ACK on pkt {i}", file=sys.stderr)
+            print(f"\nError: timeout waiting for ACK on pkt {i}")
             return
         if "IMG_NACK" in resp:
             print(f"\n  Warning: {resp.strip()}")
@@ -59,7 +66,6 @@ def cmd_send(args):
             pct = 100 * (i + 1) / total_pkts
             print(f"  {i + 1}/{total_pkts} ({pct:.0f}%)")
 
-    # Signal done
     ser.write(b"IMG_DONE\n")
     resp = _read_line(ser, timeout=10)
     if resp:
@@ -69,9 +75,9 @@ def cmd_send(args):
     print("Done.")
 
 
-def cmd_receive(args):
-    ser = serial.Serial(args.port, args.baud, timeout=1)
-    print(f"Listening on {args.port}...")
+def cmd_receive(port, baud):
+    ser = serial.Serial(port, baud, timeout=1)
+    print(f"Listening on {port}...")
 
     total_pkts = 0
     received = {}
@@ -128,15 +134,13 @@ def cmd_receive(args):
                 print(f"  Missing ({len(missing)}): {shown}"
                       f"{'...' if len(missing) > 20 else ''}")
 
-            # Reassemble
             jpeg = _reassemble(received, total_pkts)
-            out_name = args.output or f"received_{transfer_num}.jpg"
+            out_name = f"received_{transfer_num}.jpg"
             Path(out_name).write_bytes(jpeg)
             print(f"  Saved: {out_name} ({len(jpeg)} bytes)")
 
-            # Display
-            if not args.no_display:
-                _display(jpeg)
+            img = Image.open(io.BytesIO(jpeg))
+            img.show()
 
         elif rec == "ImageTransfer":
             print("RX firmware ready.")
@@ -153,11 +157,6 @@ def _reassemble(received, total_pkts):
         else:
             parts.append(b'\x00' * IMAGE_DATA_PER_PKT)
     return b''.join(parts)
-
-
-def _display(jpeg_bytes):
-    img = Image.open(io.BytesIO(jpeg_bytes))
-    img.show()
 
 
 def _read_line(ser, timeout=5):
@@ -187,25 +186,22 @@ def _wait_for(ser, prefix, timeout=5):
 
 
 def main():
-    ap = argparse.ArgumentParser(description="LoRa S-Band image transfer")
-    sub = ap.add_subparsers(dest="command", required=True)
+    print(BANNER)
+    print("  1) Send image")
+    print("  2) Receive image")
+    print()
 
-    tx = sub.add_parser("send", help="Send an image to the TX Pico")
-    tx.add_argument("--port", required=True, help="Serial port")
-    tx.add_argument("--image", required=True, help="JPEG file to send")
-    tx.add_argument("--baud", type=int, default=115200)
+    choice = input("Select mode: ").strip()
 
-    rx = sub.add_parser("receive", help="Receive and display image from RX Pico")
-    rx.add_argument("--port", required=True, help="Serial port")
-    rx.add_argument("--baud", type=int, default=115200)
-    rx.add_argument("--output", default=None, help="Output filename")
-    rx.add_argument("--no-display", action="store_true", help="Don't auto-display")
+    port = input("Serial port (e.g. /dev/tty.usbmodem101): ").strip()
+    baud = 115200
 
-    args = ap.parse_args()
-    if args.command == "send":
-        cmd_send(args)
-    elif args.command == "receive":
-        cmd_receive(args)
+    if choice == "1":
+        cmd_send(port, baud)
+    elif choice == "2":
+        cmd_receive(port, baud)
+    else:
+        print("Invalid choice.")
 
 
 if __name__ == "__main__":

@@ -1,14 +1,17 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "hal/board_pins.h"
+#include "hardware/pio.h"
 #include "pico/stdlib.h"
 #include "pico/time.h"
 #include "protocol/image_packet.h"
 #include "radio/radio_sx1280f27.h"
 #include "radio/radio_types.h"
+#include "ws2812.pio.h"
 
 #define SBAND_RF_PROFILE    1u
 #define SBAND_TX_POWER_DBM  13
@@ -16,11 +19,35 @@
 #define RX_TIMEOUT_MS       5000u
 #define TX_INTER_PKT_MS     10u
 #define BOOT_DELAY_MS       2000u
+#define LED_FLASH_MS        150u
 
 #define CMD_BUF_SIZE        600u
 
 static char g_cmd_buf[CMD_BUF_SIZE];
 static uint16_t g_cmd_pos = 0u;
+
+// ---------------------------------------------------------------------------
+// LED (WS2812 NeoPixel)
+// ---------------------------------------------------------------------------
+
+static PIO g_led_pio;
+static uint g_led_sm;
+
+static void led_init(void) {
+    g_led_pio = pio0;
+    g_led_sm = pio_claim_unused_sm(g_led_pio, true);
+    uint offset = pio_add_program(g_led_pio, &ws2812_program);
+    ws2812_program_init(g_led_pio, g_led_sm, offset, PIN_NEOPIXEL, 800000.0f, false);
+}
+
+static void led_set(uint8_t r, uint8_t g, uint8_t b) {
+    uint32_t grb = ((uint32_t)r << 8) | ((uint32_t)g << 16) | b;
+    pio_sm_put_blocking(g_led_pio, g_led_sm, grb << 8u);
+}
+
+static void led_off(void) { led_set(0, 0, 0); }
+static void led_red(void) { led_set(40, 0, 0); }
+static void led_blue(void) { led_set(0, 0, 40); }
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -54,8 +81,6 @@ static int parse_int_field(const char *line, const char *key, int fallback) {
     return atoi(v);
 }
 
-// Non-blocking: try to read a complete line from serial.
-// Returns true if g_cmd_buf contains a complete line.
 static bool try_read_line(void) {
     while (true) {
         int ch = getchar_timeout_us(0);
@@ -74,7 +99,6 @@ static bool try_read_line(void) {
     }
 }
 
-// Blocking: wait up to timeout_ms for a complete line.
 static bool wait_for_line(uint32_t timeout_ms) {
     uint64_t deadline = to_ms_since_boot(get_absolute_time()) + timeout_ms;
     while (to_ms_since_boot(get_absolute_time()) < deadline) {
@@ -119,7 +143,8 @@ static void handle_tx_session(void) {
     uint16_t total_pkts = (uint16_t)parse_int_field(g_cmd_buf, "total_pkts=", 0);
     printf("IMG_ACK,ready\n");
 
-    // Send START over LoRa
+    led_blue();
+
     image_packet_t pkt;
     memset(&pkt, 0, sizeof(pkt));
     pkt.magic = IMAGE_PACKET_MAGIC;
@@ -129,8 +154,8 @@ static void handle_tx_session(void) {
     send_lora_packet(&pkt);
     sleep_ms(TX_INTER_PKT_MS);
 
-    // Read chunks from serial, send each over LoRa
     uint16_t sent = 0u;
+    bool flash_on = true;
     while (true) {
         if (!wait_for_line(10000u)) {
             printf("ERROR,serial_timeout\n");
@@ -160,6 +185,10 @@ static void handle_tx_session(void) {
         pkt.data_len = data_len;
         hex_decode(hex_str, pkt.data, data_len);
 
+        // Flash blue while transmitting
+        if (flash_on) led_blue(); else led_off();
+        flash_on = !flash_on;
+
         if (send_lora_packet(&pkt)) {
             printf("IMG_ACK,pkt=%u\n", (unsigned)pkt_num);
             sent++;
@@ -170,7 +199,6 @@ static void handle_tx_session(void) {
         sleep_ms(TX_INTER_PKT_MS);
     }
 
-    // Send END over LoRa
     memset(&pkt, 0, sizeof(pkt));
     pkt.magic = IMAGE_PACKET_MAGIC;
     pkt.pkt_type = IMAGE_PKT_END;
@@ -178,12 +206,15 @@ static void handle_tx_session(void) {
     pkt.data_len = 0u;
     send_lora_packet(&pkt);
 
+    led_off();
     printf("IMG_COMPLETE,sent=%u,total=%u\n", (unsigned)sent, (unsigned)total_pkts);
 }
 
 // ---------------------------------------------------------------------------
 // RX: LoRa -> serial
 // ---------------------------------------------------------------------------
+
+static bool g_rx_active = false;
 
 static void handle_rx_packet(const radio_rx_frame_t *frame) {
     if (frame->length < IMAGE_HEADER_SIZE) return;
@@ -200,10 +231,13 @@ static void handle_rx_packet(const radio_rx_frame_t *frame) {
 
     switch (pkt.pkt_type) {
     case IMAGE_PKT_START:
+        g_rx_active = true;
         printf("IMG_START,total_pkts=%u\n", (unsigned)pkt.total_pkts);
         break;
 
     case IMAGE_PKT_DATA:
+        // Flash red while receiving
+        led_red();
         printf("IMG_DATA,pkt=%u,len=%u,rssi=%d,snr=%d,hex=",
                (unsigned)pkt.pkt_num,
                (unsigned)pkt.data_len,
@@ -213,9 +247,11 @@ static void handle_rx_packet(const radio_rx_frame_t *frame) {
             printf("%02X", pkt.data[i]);
         }
         printf("\n");
+        led_off();
         break;
 
     case IMAGE_PKT_END:
+        g_rx_active = false;
         printf("IMG_END,total_pkts=%u\n", (unsigned)pkt.total_pkts);
         break;
 
@@ -233,32 +269,37 @@ int main(void) {
     sleep_ms(BOOT_DELAY_MS);
 
     board_pins_init();
+    led_init();
 
     radio_status_t st = sx1280f27_init();
     if (st != RADIO_STATUS_OK) {
         printf("FATAL,sband_init,st=%d\n", (int)st);
-        while (true) sleep_ms(1000);
+        while (true) {
+            led_red();
+            sleep_ms(200);
+            led_off();
+            sleep_ms(200);
+        }
     }
     sx1280f27_set_profile(SBAND_RF_PROFILE);
     sx1280f27_set_tx_power_dbm(SBAND_TX_POWER_DBM);
 
     printf("ImageTransfer ready\n");
 
-    // Arm RX
+    // Solid red = RX idle
+    led_red();
     sx1280f27_start_rx(RX_TIMEOUT_MS);
 
     while (true) {
-        // Check serial for TX commands
         if (try_read_line()) {
             if (strncmp(g_cmd_buf, "IMG_SEND", 8) == 0) {
                 sx1280f27_abort();
                 handle_tx_session();
-                // Return to RX mode
+                led_red();
                 sx1280f27_start_rx(RX_TIMEOUT_MS);
             }
         }
 
-        // Poll LoRa
         radio_event_t ev = RADIO_EVENT_NONE;
         sx1280f27_poll_event(&ev);
 
@@ -267,8 +308,10 @@ int main(void) {
             if (sx1280f27_read_rx(&frame) == RADIO_STATUS_OK) {
                 handle_rx_packet(&frame);
             }
+            if (!g_rx_active) led_red();
             sx1280f27_start_rx(RX_TIMEOUT_MS);
         } else if (ev == RADIO_EVENT_TIMEOUT) {
+            if (!g_rx_active) led_red();
             sx1280f27_start_rx(RX_TIMEOUT_MS);
         } else if (ev == RADIO_EVENT_CRC_FAIL || ev == RADIO_EVENT_ERROR) {
             sx1280f27_abort();
