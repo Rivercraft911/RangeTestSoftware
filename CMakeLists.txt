@@ -295,3 +295,69 @@ target_include_directories(ImageTransfer PRIVATE
 )
 
 pico_add_extra_outputs(ImageTransfer)
+
+# --- Balloon Link Test (Flight) ---
+
+add_executable(BalloonFlight
+        src/tests/balloon_link_test.c
+        src/hal/board_pins.c
+        src/radio/radio_sx1280f27.c
+        src/radio/radio_rfm98pw.c
+        )
+
+target_compile_definitions(BalloonFlight PRIVATE BALLOON_FORCE_ROLE=1 BALLOON_HAS_IMAGE SX1280F27_LOG_LEVEL=1)
+
+pico_set_program_name(BalloonFlight "BalloonFlight")
+pico_set_program_version(BalloonFlight "0.1")
+
+pico_generate_pio_header(BalloonFlight ${CMAKE_CURRENT_LIST_DIR}/pio/ws2812.pio)
+
+pico_enable_stdio_uart(BalloonFlight 0)
+pico_enable_stdio_usb(BalloonFlight 1)
+
+target_link_libraries(BalloonFlight
+        pico_stdlib
+        hardware_spi
+        hardware_pio
+        hardware_timer
+        hardware_watchdog
+        )
+
+target_include_directories(BalloonFlight PRIVATE
+        ${CMAKE_CURRENT_LIST_DIR}/include
+)
+
+pico_add_extra_outputs(BalloonFlight)
+
+# --- Balloon Link Test (Ground) ---
+
+add_executable(BalloonGround
+        src/tests/balloon_link_test.c
+        src/hal/board_pins.c
+        src/radio/radio_sx1280f27.c
+        src/radio/radio_rfm98pw.c
+        )
+
+target_compile_definitions(BalloonGround PRIVATE BALLOON_FORCE_ROLE=2 SX1280F27_LOG_LEVEL=2)
+
+pico_set_program_name(BalloonGround "BalloonGround")
+pico_set_program_version(BalloonGround "0.1")
+
+pico_generate_pio_header(BalloonGround ${CMAKE_CURRENT_LIST_DIR}/pio/ws2812.pio)
+
+pico_enable_stdio_uart(BalloonGround 0)
+pico_enable_stdio_usb(BalloonGround 1)
+
+target_link_libraries(BalloonGround
+        pico_stdlib
+        hardware_spi
+        hardware_pio
+        hardware_timer
+        hardware_watchdog
+        )
+
+target_include_directories(BalloonGround PRIVATE
+        ${CMAKE_CURRENT_LIST_DIR}/include
+)
+
+pico_add_extra_outputs(BalloonGround)
