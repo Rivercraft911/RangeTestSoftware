@@ -7,7 +7,10 @@ import serial
 import serial.tools.list_ports
 from rich.console import Console
 
-console = Console()
+console = Console(highlight=False)
+
+# Apple logo rainbow (green → yellow → orange → red → purple → blue)
+APPLE = ["#61BB46", "#FDB827", "#F5821F", "#E03A3E", "#963D97", "#009DDC"]
 
 IMAGE_DATA_PER_PKT = 245
 
@@ -39,7 +42,8 @@ def pick_serial_port():
 
         console.print("\n  Available ports:")
         for i, p in enumerate(ports):
-            console.print(f"    {i + 1}) {p.device}  — {p.description}")
+            c = APPLE[i % len(APPLE)]
+            console.print(f"  [bold {c}]{i + 1})[/]  {p.device}  —  {p.description}")
 
         choice = input(f"\n  Select port [1-{len(ports)}]: ").strip()
         try:
@@ -104,9 +108,10 @@ def set_rf_profile(ser, profile_num):
 
 def pick_rf_profile(ser):
     console.print("\n  RF Profile:")
-    for k, (name, desc, _) in RF_PROFILES.items():
+    for j, (k, (name, desc, _)) in enumerate(RF_PROFILES.items()):
+        c = APPLE[j % len(APPLE)]
         tag = " (default)" if k == "1" else ""
-        console.print(f"    {k}) {name:15s} — {desc}{tag}")
+        console.print(f"  [bold {c}]{k})[/]  {name:15s} — {desc}{tag}")
 
     choice = input("\n  Select profile [1-4]: ").strip()
     if choice not in RF_PROFILES:

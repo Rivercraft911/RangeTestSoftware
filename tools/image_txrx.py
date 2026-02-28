@@ -5,11 +5,12 @@ River Dowdy - Winter 2025
 Dependencies: pip install pyserial Pillow matplotlib rich
 """
 from rich.console import Console
+from rich.text import Text
 
-from _serial_bridge import pick_serial_port, open_serial
+from _serial_bridge import pick_serial_port, open_serial, APPLE
 from _transfer import cmd_send, cmd_receive
 
-console = Console()
+console = Console(highlight=False)
 
 BANNER = r"""                    .                            .--------'  .--------'             .-.                                  .--------'
 ..-.     .-.        /                            (_)   /     (_)   /    /           (_) )-.                              (_)   /            /
@@ -19,8 +20,18 @@ BANNER = r"""                    .                            .--------'  .-----
   `-' `-'                               `-'     (_/  `-     (_/  `-              (_/     `-._)          `--._/          (_/  `-   /             """
 
 
+def _print_banner():
+    for line in BANNER.split("\n"):
+        console.print(Text(line))
+
+
+def _menu_item(num, label):
+    c = APPLE[(num - 1) % len(APPLE)]
+    console.print(f"  [bold {c}]{num})[/]  {label}")
+
+
 def main():
-    console.print(BANNER)
+    _print_banner()
 
     port = pick_serial_port()
     ser = open_serial(port)
@@ -30,10 +41,11 @@ def main():
     console.print(f"  Connected: {port}")
 
     while True:
-        console.print("\n  1) Send image")
-        console.print("  2) Receive image")
-        console.print("  3) Change serial port")
-        console.print("  4) Quit")
+        console.print()
+        _menu_item(1, "Send image")
+        _menu_item(2, "Receive image")
+        _menu_item(3, "Change serial port")
+        _menu_item(4, "Quit")
 
         choice = input("\n  Select mode: ").strip()
 
