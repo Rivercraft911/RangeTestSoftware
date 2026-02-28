@@ -23,3 +23,6 @@ include/data/balloon_image.h
 
 # Claude Code
 CLAUDE.md
+
+# Local planning prompts
+BALLOON_LINK_BUDGET_SYSTEM_PROMPT.md
