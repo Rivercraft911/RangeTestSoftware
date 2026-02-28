@@ -80,7 +80,7 @@ typedef struct __attribute__((packed)) {
 _Static_assert(sizeof(balloon_cmd_t) == 6u, "balloon_cmd_t size");
 _Static_assert(sizeof(balloon_cmd_t) <= UHF_MAX_PAYLOAD, "cmd exceeds UHF limit");
 
-/* ---- Command ACK: flight -> ground, UHF (10 bytes) ---- */
+/* ---- Command ACK: flight -> ground, UHF (10 bytes; hdr.seq echoes cmd seq) ---- */
 typedef struct __attribute__((packed)) {
     balloon_header_t hdr;
     uint8_t  cmd_id;        /* echoes received command */

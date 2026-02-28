@@ -8,7 +8,7 @@ Dashboard reads snapshots from the main thread.
 import threading
 import time
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass, replace
 from typing import Optional
 
 from _protocol import Beacon, CmdAck, BulkData, CmdSent, CmdFail
@@ -25,6 +25,8 @@ class CommandRecord:
     result: int = -1
     failed: bool = False
     fail_reason: str = ""
+    radio_sent: bool = False
+    radio_sent_time: float = 0.0
 
     @property
     def rtt_ms(self) -> float:
@@ -56,8 +58,14 @@ class GroundState:
 
     def next_seq(self) -> int:
         with self._lock:
-            self._seq_counter += 1
+            self._seq_counter = (self._seq_counter + 1) & 0xFF
             return self._seq_counter
+
+    def _find_command_locked(self, seq: int) -> Optional[CommandRecord]:
+        for rec in reversed(self.command_log):
+            if rec.seq == seq:
+                return rec
+        return None
 
     def record_beacon(self, bcn: Beacon):
         with self._lock:
@@ -101,12 +109,13 @@ class GroundState:
     def record_ack(self, ack: CmdAck):
         with self._lock:
             self.ack_count += 1
-            for rec in reversed(self.command_log):
-                if not rec.acked and not rec.failed:
-                    rec.acked = True
-                    rec.ack_time = time.time()
-                    rec.result = ack.result
-                    break
+            rec = self._find_command_locked(ack.seq)
+            if rec and not rec.acked:
+                rec.acked = True
+                rec.failed = False
+                rec.fail_reason = ""
+                rec.ack_time = time.time()
+                rec.result = ack.result
 
     def submit_command(self, cmd_name: str, param: int = 0) -> int:
         seq = self.next_seq()
@@ -119,20 +128,42 @@ class GroundState:
         return seq
 
     def record_cmd_sent(self, sent: CmdSent):
-        pass  # already tracked via submit_command
+        with self._lock:
+            rec = self._find_command_locked(sent.seq)
+            if rec:
+                rec.radio_sent = True
+                rec.radio_sent_time = time.time()
 
     def record_cmd_fail(self, fail: CmdFail):
         with self._lock:
-            for rec in reversed(self.command_log):
-                if not rec.acked and not rec.failed:
-                    rec.failed = True
-                    rec.fail_reason = fail.reason
-                    break
+            rec = self._find_command_locked(fail.seq)
+            if rec is None:
+                for cand in reversed(self.command_log):
+                    if not cand.acked and not cand.failed:
+                        rec = cand
+                        break
+            if rec and not rec.acked:
+                rec.failed = True
+                rec.fail_reason = fail.reason
+
+    def mark_command_timeout(self, seq: int, reason: str = "no_ack"):
+        with self._lock:
+            rec = self._find_command_locked(seq)
+            if rec and not rec.acked and not rec.failed:
+                rec.failed = True
+                rec.fail_reason = reason
+
+    def get_command(self, seq: int) -> Optional[CommandRecord]:
+        with self._lock:
+            rec = self._find_command_locked(seq)
+            return replace(rec) if rec else None
 
     def clear_bulk(self):
         with self._lock:
             self.bulk_received.clear()
             self.bulk_total = 0
+            self.bulk_band = 0
+            self.bulk_start_time = 0.0
             self.bulk_times.clear()
             self.throughput.clear()
 

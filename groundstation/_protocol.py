@@ -5,7 +5,7 @@ Ground firmware prints KEY,field=value lines over USB serial.
 This module parses them into typed dataclasses and builds command strings.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
 
 
@@ -35,11 +35,11 @@ class Beacon:
 
     @property
     def uhf_ok(self) -> bool:
-        return bool(self.flags & 1)   # BALLOON_FLAG_UHF_OK = bit 0
+        return bool(self.flags & 2)   # BALLOON_FLAG_UHF_OK = bit 1
 
     @property
     def sband_ok(self) -> bool:
-        return bool(self.flags & 2)   # BALLOON_FLAG_SBAND_OK = bit 1
+        return bool(self.flags & 1)   # BALLOON_FLAG_SBAND_OK = bit 0
 
     @property
     def image_loaded(self) -> bool:
@@ -94,6 +94,7 @@ class CmdSent:
 @dataclass
 class CmdFail:
     cmd: int = 0
+    seq: int = 0
     reason: str = ""
 
 
@@ -103,6 +104,13 @@ STATE_NAMES = {0: "BEACON", 1: "IMAGE", 2: "BULK", 3: "POWER_SWEEP"}
 CMD_NAMES = {0: "PING", 1: "SET_SBAND_PROFILE", 2: "START_IMAGE",
              3: "START_BULK", 4: "STOP", 5: "POWER_SWEEP"}
 BAND_NAMES = {1: "UHF", 2: "S-Band"}
+CMD_RESULT_NAMES = {
+    0: "OK",
+    1: "INVALID_PARAM",
+    2: "UNAVAILABLE",
+    3: "BUSY",
+    4: "RADIO_ERR",
+}
 
 
 def _parse_kv(fields_str: str) -> dict:
@@ -181,6 +189,7 @@ def parse_line(line: str):
     if tag == "CMD_FAIL":
         return "CMD_FAIL", CmdFail(
             cmd=_int(kv, "cmd"),
+            seq=_int(kv, "seq"),
             reason=kv.get("reason", "unknown"),
         )
 
@@ -199,3 +208,7 @@ def build_nack_line(missing_indices: list) -> str:
     for idx in missing_indices:
         hex_parts.append(f"{idx & 0xFF:02X}{(idx >> 8) & 0xFF:02X}")
     return "NACK,hex=" + "".join(hex_parts) + "\n"
+
+
+def describe_cmd_result(result: int) -> str:
+    return CMD_RESULT_NAMES.get(result, f"ERR({result})")

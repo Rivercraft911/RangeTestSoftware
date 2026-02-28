@@ -33,7 +33,7 @@ from rich.console import Console
 from _protocol import (
     parse_line, build_cmd_line, build_nack_line,
     Beacon, CmdAck, BulkData, CmdSent, CmdFail,
-    STATE_NAMES, CMD_NAMES, BAND_NAMES,
+    STATE_NAMES, CMD_NAMES, BAND_NAMES, describe_cmd_result,
 )
 from _state import GroundState
 from _logger import BalloonLogger
@@ -104,10 +104,12 @@ class SerialReader(threading.Thread):
                     self.state.record_ack(record)
                     self.logger.log_ack(record)
                     cmd_name = CMD_NAMES.get(record.cmd, f"?{record.cmd}")
-                    result_str = "OK" if record.result == 0 else f"ERR({record.result})"
-                    color = APPLE[0] if record.result == 0 else APPLE[3]
+                    result_str = describe_cmd_result(record.result)
+                    color = APPLE[0] if record.result == 0 else (
+                        APPLE[1] if record.result == 3 else APPLE[3]
+                    )
                     console.print(
-                        f"  [{color}]ACK[/] cmd={cmd_name} "
+                        f"  [{color}]ACK[/] cmd={cmd_name} seq={record.seq} "
                         f"result={result_str} "
                         f"cmd_rssi={record.cmd_rssi_x100 / 100:.1f} "
                         f"cmd_snr={record.cmd_snr_x100 / 100:.1f}"
@@ -126,14 +128,25 @@ class SerialReader(threading.Thread):
                                 f"{record.pkt_num + 1}/{record.total_pkts} "
                                 f"({pct}%)"
                             )
+                        if record.pkt_num == record.total_pkts - 1:
+                            console.print(
+                                f"  [{APPLE[1]}]Image payload complete[/] "
+                                f"balloon will listen for NACKs (up to 8s)"
+                            )
 
                 elif tag == "CMD_SENT" and isinstance(record, CmdSent):
                     self.state.record_cmd_sent(record)
+                    cmd_name = CMD_NAMES.get(record.cmd, f"?{record.cmd}")
+                    console.print(
+                        f"  [{APPLE[2]}]RADIO_TX[/] cmd={cmd_name} seq={record.seq}"
+                    )
 
                 elif tag == "CMD_FAIL" and isinstance(record, CmdFail):
                     self.state.record_cmd_fail(record)
+                    cmd_name = CMD_NAMES.get(record.cmd, f"?{record.cmd}")
                     console.print(
-                        f"  [{APPLE[3]}]CMD_FAIL[/] reason={record.reason}"
+                        f"  [{APPLE[3]}]CMD_FAIL[/] cmd={cmd_name} "
+                        f"seq={record.seq} reason={record.reason}"
                     )
 
                 elif tag == "NACK_SENT":
@@ -184,18 +197,70 @@ def _wait_input(input_q: queue.Queue) -> str:
 
 # ── Command helpers ──
 
+def _command_policy(cmd_name: str) -> tuple[int, float]:
+    if cmd_name == "STOP":
+        return 4, 1.2
+    if cmd_name == "PING":
+        return 2, 2.0
+    if cmd_name == "SET_SBAND_PROFILE":
+        return 2, 2.8
+    if cmd_name in {"START_IMAGE", "START_BULK", "POWER_SWEEP"}:
+        return 1, 2.8
+    return 1, 2.0
+
+
+def _wait_for_command_result(state: GroundState, seq: int, timeout_s: float):
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
+        rec = state.get_command(seq)
+        if rec and (rec.acked or rec.failed):
+            return rec
+        try:
+            plt.pause(0.05)
+        except Exception:
+            time.sleep(0.05)
+    return state.get_command(seq)
+
+
 def send_command(ser, state: GroundState, logger: BalloonLogger,
                  cmd_name: str, param: int = 0):
     seq = state.submit_command(cmd_name, param)
     line = build_cmd_line(cmd_name, param, seq)
     logger.log_cmd(cmd_name, param, seq)
-    ser.write(line.encode())
-    console.print(f"  [{APPLE[5]}]>> {cmd_name}[/] param={param} seq={seq}")
+    retries, ack_timeout = _command_policy(cmd_name)
+
+    for attempt in range(1, retries + 1):
+        try:
+            ser.write(line.encode())
+            ser.flush()
+        except serial.SerialException as e:
+            state.mark_command_timeout(seq, reason="serial_write")
+            console.print(f"  [{APPLE[3]}]Serial write failed[/] {e}")
+            return state.get_command(seq)
+
+        suffix = "" if attempt == 1 else f" attempt={attempt}/{retries}"
+        console.print(
+            f"  [{APPLE[5]}]>> {cmd_name}[/] param={param} seq={seq}{suffix}"
+        )
+
+        rec = _wait_for_command_result(state, seq, ack_timeout)
+        if rec and (rec.acked or rec.failed):
+            return rec
+
+        if attempt < retries:
+            console.print(
+                f"  [{APPLE[1]}]No ACK yet[/] cmd={cmd_name} seq={seq}; retrying"
+            )
+
+    state.mark_command_timeout(seq)
+    console.print(f"  [{APPLE[3]}]No ACK[/] cmd={cmd_name} seq={seq}")
+    return state.get_command(seq)
 
 
 def send_nack(ser, missing: list):
     line = build_nack_line(missing)
     ser.write(line.encode())
+    ser.flush()
     console.print(f"  [{APPLE[4]}]>> NACK[/] missing={len(missing)} pkts")
 
 
@@ -242,16 +307,18 @@ def main():
 
     # Wait for ready line
     console.print(f"  [{APPLE[1]}]Waiting for ground firmware...[/]")
+    saw_ready_line = False
     deadline = time.time() + 5
     while time.time() < deadline:
         raw = ser.readline()
         if raw:
             line = raw.decode("utf-8", errors="replace").strip()
             if "ready" in line.lower():
+                saw_ready_line = True
                 console.print(f"  [{APPLE[0]}]Ground firmware ready: {line}[/]")
                 break
     else:
-        console.print(f"  [{APPLE[1]}]No ready line — proceeding anyway[/]")
+        console.print(f"  [{APPLE[1]}]No ready line — probing link instead[/]")
 
     # Init state, logger, reader
     state = GroundState()
@@ -260,6 +327,13 @@ def main():
 
     reader = SerialReader(ser, state, logger)
     reader.start()
+
+    if not saw_ready_line:
+        rec = send_command(ser, state, logger, "PING")
+        if rec and rec.acked and rec.result == 0:
+            console.print(f"  [{APPLE[0]}]Link probe succeeded[/] ground firmware is responding")
+        else:
+            console.print(f"  [{APPLE[3]}]Link probe failed[/] no PING ACK yet")
 
     # Start non-blocking input thread
     input_q = queue.Queue()
@@ -282,11 +356,23 @@ def main():
         while True:
             now = time.time()
 
-            # Refresh dashboard (~15 Hz when open)
-            if dash_fig is not None and now - last_dash_update > 0.066:
+            if dash_fig is not None and not plt.fignum_exists(dash_fig.number):
+                dash_fig = None
+                dash_axes = None
+            if img_fig is not None and not plt.fignum_exists(img_fig.number):
+                img_fig = None
+                img_ax = None
+
+            # Refresh dashboard / preview (~15 Hz when a figure is open)
+            if (dash_fig is not None or img_fig is not None) and now - last_dash_update > 0.066:
                 try:
                     snap = state.get_snapshot()
-                    update_dashboard(dash_fig, dash_axes, snap, sband_profile)
+                    active_profile = (
+                        snap["last_beacon"].sband_profile
+                        if snap["last_beacon"] is not None else sband_profile
+                    )
+                    if dash_fig is not None:
+                        update_dashboard(dash_fig, dash_axes, snap, active_profile)
                     if img_fig is not None and snap["bulk_total"] > 0:
                         update_image_preview(img_fig, img_ax,
                                              snap["bulk_data"],
@@ -303,13 +389,19 @@ def main():
 
             # Check auto-stop timer (brute force test)
             if auto_stop_time and time.time() >= auto_stop_time:
-                send_command(ser, state, logger, "STOP")
+                rec = send_command(ser, state, logger, "STOP")
                 auto_stop_time = None
                 snap = state.get_snapshot()
-                console.print(
-                    f"\n  [{APPLE[0]}]Brute force complete — "
-                    f"{snap['bulk_count']} packets received[/]"
-                )
+                if rec and rec.acked and rec.result == 0:
+                    console.print(
+                        f"\n  [{APPLE[0]}]Brute force complete[/] "
+                        f"{snap['bulk_count']} packets received"
+                    )
+                else:
+                    console.print(
+                        f"\n  [{APPLE[3]}]Auto-stop not confirmed[/] "
+                        f"{snap['bulk_count']} packets received so far"
+                    )
                 print_menu()
                 _prompt()
 
@@ -337,7 +429,11 @@ def main():
                     console.print(f"  [{APPLE[0]}]Dashboard opened[/]")
                 else:
                     snap = state.get_snapshot()
-                    update_dashboard(dash_fig, dash_axes, snap, sband_profile)
+                    active_profile = (
+                        snap["last_beacon"].sband_profile
+                        if snap["last_beacon"] is not None else sband_profile
+                    )
+                    update_dashboard(dash_fig, dash_axes, snap, active_profile)
                     console.print(f"  [{APPLE[0]}]Dashboard refreshed[/]")
 
             elif choice == "2":
@@ -351,21 +447,32 @@ def main():
                 _prompt("\n  Select profile [1-4]: ")
                 p = _wait_input(input_q).strip()
                 if p in RF_PROFILES:
-                    sband_profile = int(p)
-                    send_command(ser, state, logger, "SET_SBAND_PROFILE",
-                                param=sband_profile)
+                    requested_profile = int(p)
+                    rec = send_command(ser, state, logger, "SET_SBAND_PROFILE",
+                                       param=requested_profile)
+                    if rec and rec.acked and rec.result == 0:
+                        sband_profile = requested_profile
+                    else:
+                        console.print(
+                            f"  [{APPLE[3]}]Profile change was not confirmed[/]"
+                        )
                 else:
                     console.print(f"  [{APPLE[3]}]Invalid profile[/]")
 
             elif choice == "4":
                 state.clear_bulk()
-                send_command(ser, state, logger, "START_IMAGE")
-                if img_fig is None:
-                    plt.ion()
-                    img_fig, img_ax = init_image_preview()
-                    plt.show(block=False)
-                console.print(f"  [{APPLE[4]}]Image transfer started — "
-                              f"watch preview window[/]")
+                rec = send_command(ser, state, logger, "START_IMAGE")
+                if rec and rec.acked and rec.result == 0:
+                    if img_fig is None:
+                        plt.ion()
+                        img_fig, img_ax = init_image_preview()
+                        plt.show(block=False)
+                    console.print(f"  [{APPLE[4]}]Image transfer started[/] "
+                                  f"watch preview window")
+                else:
+                    console.print(
+                        f"  [{APPLE[3]}]Image transfer was not confirmed[/]"
+                    )
 
             elif choice == "5":
                 console.print("  Band for bulk test:")
@@ -376,9 +483,14 @@ def main():
                 # BALLOON_BAND_SBAND=2, BALLOON_BAND_UHF=1
                 band = 1 if b == "2" else 2
                 state.clear_bulk()
-                send_command(ser, state, logger, "START_BULK", param=band)
-                console.print(f"  [{APPLE[5]}]Bulk test started on "
-                              f"{'UHF' if band == 1 else 'S-Band'}[/]")
+                rec = send_command(ser, state, logger, "START_BULK", param=band)
+                if rec and rec.acked and rec.result == 0:
+                    console.print(f"  [{APPLE[5]}]Bulk test started on "
+                                  f"{'UHF' if band == 1 else 'S-Band'}[/]")
+                else:
+                    console.print(
+                        f"  [{APPLE[3]}]Bulk test was not confirmed[/]"
+                    )
 
             elif choice == "6":
                 send_command(ser, state, logger, "STOP")
@@ -400,10 +512,15 @@ def main():
                     max_pwr = 13
                 # Encode: (band << 5) | max_power
                 param = (band << 5) | max_pwr
-                send_command(ser, state, logger, "POWER_SWEEP", param=param)
-                band_name = "UHF" if band == 1 else "S-Band"
-                console.print(f"  [{APPLE[0]}]Power sweep on {band_name} "
-                              f"(2..{max_pwr} dBm)[/]")
+                rec = send_command(ser, state, logger, "POWER_SWEEP", param=param)
+                if rec and rec.acked and rec.result == 0:
+                    band_name = "UHF" if band == 1 else "S-Band"
+                    console.print(f"  [{APPLE[0]}]Power sweep on {band_name} "
+                                  f"(2..{max_pwr} dBm)[/]")
+                else:
+                    console.print(
+                        f"  [{APPLE[3]}]Power sweep was not confirmed[/]"
+                    )
 
             elif choice == "8":
                 snap = state.get_snapshot()
@@ -448,13 +565,18 @@ def main():
                 duration = int(d) if d.isdigit() else 60
 
                 state.clear_bulk()
-                send_command(ser, state, logger, "START_BULK", param=band)
-                auto_stop_time = time.time() + duration
-                console.print(
-                    f"  [{APPLE[2]}]Brute force: "
-                    f"{'UHF' if band == 1 else 'S-Band'} for "
-                    f"{duration}s — auto-stop at end[/]"
-                )
+                rec = send_command(ser, state, logger, "START_BULK", param=band)
+                if rec and rec.acked and rec.result == 0:
+                    auto_stop_time = time.time() + duration
+                    console.print(
+                        f"  [{APPLE[2]}]Brute force: "
+                        f"{'UHF' if band == 1 else 'S-Band'} for "
+                        f"{duration}s - auto-stop at end[/]"
+                    )
+                else:
+                    console.print(
+                        f"  [{APPLE[3]}]Brute force test was not confirmed[/]"
+                    )
 
             elif choice == "L":
                 snap = state.get_snapshot()

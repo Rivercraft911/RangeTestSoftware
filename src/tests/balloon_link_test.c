@@ -39,6 +39,11 @@
 #define DEFAULT_SBAND_PROFILE   1u
 #define DEFAULT_TX_POWER_DBM    13
 
+#define CMD_RESULT_INVALID_PARAM    1u
+#define CMD_RESULT_UNAVAILABLE      2u
+#define CMD_RESULT_BUSY             3u
+#define CMD_RESULT_RADIO_ERR        4u
+
 /* ---- Role selection ---- */
 #ifndef BALLOON_FORCE_ROLE
 #error "Define BALLOON_FORCE_ROLE=1 (flight) or BALLOON_FORCE_ROLE=2 (ground)"
@@ -245,20 +250,20 @@ static void flight_send_beacon(void) {
     led_off();
 }
 
-static void flight_send_ack(uint8_t cmd_id, uint8_t result,
+static void flight_send_ack(uint8_t cmd_seq, uint8_t cmd_id, uint8_t result,
                              int16_t rssi, int16_t snr) {
     balloon_cmd_ack_t ack;
     memset(&ack, 0, sizeof(ack));
     ack.hdr.magic = BALLOON_MAGIC;
     ack.hdr.msg_type = BALLOON_MSG_CMD_ACK;
-    ack.hdr.seq = g_seq++;
+    ack.hdr.seq = cmd_seq;
     ack.cmd_id = cmd_id;
     ack.result = result;
     ack.cmd_rssi_x100 = rssi;
     ack.cmd_snr_x100 = snr;
 
-    uhf_send((const uint8_t *)&ack, sizeof(ack));
-    g_tx_count++;
+    if (uhf_send((const uint8_t *)&ack, sizeof(ack)))
+        g_tx_count++;
 }
 
 static void flight_handle_cmd(const balloon_cmd_t *cmd,
@@ -276,10 +281,13 @@ static void flight_handle_cmd(const balloon_cmd_t *cmd,
     case BALLOON_CMD_SET_SBAND_PROF:
         if (cmd->param >= 1u && cmd->param <= 4u) {
             sx1280f27_abort();
-            sx1280f27_set_profile(cmd->param);
-            g_sband_profile = cmd->param;
+            if (sx1280f27_set_profile(cmd->param) == RADIO_STATUS_OK) {
+                g_sband_profile = cmd->param;
+            } else {
+                result = CMD_RESULT_RADIO_ERR;
+            }
         } else {
-            result = 1u;
+            result = CMD_RESULT_INVALID_PARAM;
         }
         break;
 
@@ -287,7 +295,7 @@ static void flight_handle_cmd(const balloon_cmd_t *cmd,
 #ifdef BALLOON_HAS_IMAGE
         g_state = BALLOON_STATE_IMAGE;
 #else
-        result = 2u;
+        result = CMD_RESULT_UNAVAILABLE;
 #endif
         break;
 
@@ -331,10 +339,16 @@ static void flight_handle_cmd(const balloon_cmd_t *cmd,
         break;
     }
 
-    flight_send_ack(cmd->cmd_id, result, rssi, snr);
+    flight_send_ack(cmd->hdr.seq, cmd->cmd_id, result, rssi, snr);
 }
 
-static bool flight_poll_uhf_cmd(uint32_t listen_ms) {
+static bool flight_cmd_allowed_while_busy(uint8_t cmd_id) {
+    return cmd_id == BALLOON_CMD_PING || cmd_id == BALLOON_CMD_STOP;
+}
+
+static bool flight_poll_uhf_cmd_window(uint32_t listen_ms, bool busy_only,
+                                       bool *saw_stop) {
+    if (saw_stop) *saw_stop = false;
     rfm98pw_start_rx(listen_ms);
     uint64_t deadline = to_ms_since_boot(get_absolute_time()) + listen_ms;
     while (to_ms_since_boot(get_absolute_time()) < deadline) {
@@ -348,9 +362,20 @@ static bool flight_poll_uhf_cmd(uint32_t listen_ms) {
                 memcpy(&cmd, frame.data, sizeof(cmd));
                 if (cmd.hdr.magic == BALLOON_MAGIC &&
                     cmd.hdr.msg_type == BALLOON_MSG_CMD) {
-                    led_green();  /* flash green = command received */
-                    flight_handle_cmd(&cmd, frame.rssi_dbm_x100,
-                                      frame.snr_db_x100);
+                    if (busy_only && !flight_cmd_allowed_while_busy(cmd.cmd_id)) {
+                        g_rx_count++;
+                        g_last_cmd_rssi = frame.rssi_dbm_x100;
+                        g_last_cmd_snr = frame.snr_db_x100;
+                        flight_send_ack(cmd.hdr.seq, cmd.cmd_id, CMD_RESULT_BUSY,
+                                        frame.rssi_dbm_x100,
+                                        frame.snr_db_x100);
+                    } else {
+                        led_green();  /* flash green = command received */
+                        flight_handle_cmd(&cmd, frame.rssi_dbm_x100,
+                                          frame.snr_db_x100);
+                    }
+                    if (saw_stop && cmd.cmd_id == BALLOON_CMD_STOP)
+                        *saw_stop = true;
                     return true;
                 }
             }
@@ -367,33 +392,15 @@ static bool flight_poll_uhf_cmd(uint32_t listen_ms) {
     return false;
 }
 
-/* Quick non-blocking UHF check for STOP during long operations */
-static bool flight_check_uhf_stop(void) {
-    rfm98pw_start_rx(200u);
-    for (int i = 0; i < 100; i++) {
-        radio_event_t ev = RADIO_EVENT_NONE;
-        rfm98pw_poll_event(&ev);
-        if (ev == RADIO_EVENT_RX_DONE) {
-            radio_rx_frame_t frame;
-            if (rfm98pw_read_rx(&frame) == RADIO_STATUS_OK &&
-                frame.length >= sizeof(balloon_cmd_t)) {
-                balloon_cmd_t cmd;
-                memcpy(&cmd, frame.data, sizeof(cmd));
-                if (cmd.hdr.magic == BALLOON_MAGIC &&
-                    cmd.hdr.msg_type == BALLOON_MSG_CMD) {
-                    flight_handle_cmd(&cmd, frame.rssi_dbm_x100,
-                                      frame.snr_db_x100);
-                    if (cmd.cmd_id == BALLOON_CMD_STOP)
-                        return true;
-                }
-            }
-        } else if (ev == RADIO_EVENT_TIMEOUT) {
-            break;
-        }
-        sleep_ms(2);
-    }
-    rfm98pw_abort();
-    return false;
+static bool flight_poll_uhf_cmd(uint32_t listen_ms) {
+    return flight_poll_uhf_cmd_window(listen_ms, false, NULL);
+}
+
+/* Quick UHF control poll during long operations: allow PING/STOP, reject others. */
+static bool flight_check_uhf_busy_cmd(uint32_t listen_ms) {
+    bool saw_stop = false;
+    (void)flight_poll_uhf_cmd_window(listen_ms, true, &saw_stop);
+    return saw_stop;
 }
 
 /* ---- Image downlink ---- */
@@ -427,13 +434,17 @@ static void flight_run_image(void) {
         memcpy(pkt.data, &IMAGE_DATA[offset], chunk);
 
         uint8_t tx_len = BALLOON_BULK_HDR_SIZE + chunk;
-        sband_send((const uint8_t *)&pkt, tx_len);
-        g_tx_count++;
+        if (sband_send((const uint8_t *)&pkt, tx_len))
+            g_tx_count++;
 
         if ((i & 0x0F) == 0) led_purple();
         else if ((i & 0x0F) == 8) led_off();
 
         sleep_ms(BULK_INTER_PKT_MS);
+
+        if ((i & 0x07u) == 0x07u) {
+            if (flight_check_uhf_busy_cmd(40u)) return;
+        }
 
         if (g_state != BALLOON_STATE_IMAGE) return;
     }
@@ -443,8 +454,19 @@ static void flight_run_image(void) {
         sx1280f27_start_rx(ARQ_RX_TIMEOUT_MS);
         bool got_nack = false;
         uint64_t deadline = to_ms_since_boot(get_absolute_time()) + ARQ_RX_TIMEOUT_MS;
+        uint64_t next_cmd_poll = to_ms_since_boot(get_absolute_time());
 
         while (to_ms_since_boot(get_absolute_time()) < deadline) {
+            uint64_t now_ms = to_ms_since_boot(get_absolute_time());
+            if (now_ms >= next_cmd_poll) {
+                if (flight_check_uhf_busy_cmd(20u)) {
+                    sx1280f27_abort();
+                    led_off();
+                    return;
+                }
+                next_cmd_poll = now_ms + 75u;
+            }
+
             radio_event_t ev = RADIO_EVENT_NONE;
             sx1280f27_poll_event(&ev);
             if (ev == RADIO_EVENT_RX_DONE) {
@@ -483,8 +505,8 @@ static void flight_run_image(void) {
                             memcpy(rpkt.data, &IMAGE_DATA[off], ch);
 
                             uint8_t tl = BALLOON_BULK_HDR_SIZE + ch;
-                            sband_send((const uint8_t *)&rpkt, tl);
-                            g_tx_count++;
+                            if (sband_send((const uint8_t *)&rpkt, tl))
+                                g_tx_count++;
                             sleep_ms(BULK_INTER_PKT_MS);
                         }
                         got_nack = true;
@@ -513,7 +535,6 @@ static void flight_run_image(void) {
 
 static void flight_run_bulk(void) {
     led_blue();
-    uint16_t total = (uint16_t)(BALLOON_BULK_TEXT_LEN / BALLOON_BULK_DATA_MAX + 1u);
 
     while (g_state == BALLOON_STATE_BULK) {
         balloon_bulk_t pkt;
@@ -546,9 +567,9 @@ static void flight_run_bulk(void) {
 
         sleep_ms(BULK_INTER_PKT_MS);
 
-        /* Check for STOP every 4 packets */
+        /* Check for UHF control every 4 packets */
         if ((g_bulk_pkt_num & 0x03) == 0) {
-            if (flight_check_uhf_stop()) return;
+            if (flight_check_uhf_busy_cmd(200u)) return;
         }
     }
     led_off();
@@ -582,10 +603,12 @@ static void flight_run_power_sweep(void) {
                 pkt.total_pkts = 0u;
                 pkt.band = BALLOON_BAND_SBAND;
                 pkt.data_len = 10u;
-                sband_send((const uint8_t *)&pkt, BALLOON_BULK_HDR_SIZE + 10u);
-                g_tx_count++;
+                if (sband_send((const uint8_t *)&pkt, BALLOON_BULK_HDR_SIZE + 10u))
+                    g_tx_count++;
             }
             sleep_ms(500);
+
+            if (flight_check_uhf_busy_cmd(40u)) return;
         }
 
         g_sweep_cur_dbm += SWEEP_STEP_DBM;
@@ -599,7 +622,7 @@ static void flight_run_power_sweep(void) {
             g_state = BALLOON_STATE_BEACON;
         }
 
-        if (flight_check_uhf_stop()) return;
+        if (flight_check_uhf_busy_cmd(40u)) return;
     }
     led_off();
 }
@@ -743,12 +766,29 @@ static void ground_handle_rx(const radio_rx_frame_t *frame, uint8_t band) {
     }
 }
 
-static void ground_send_cmd(uint8_t cmd_id, uint8_t param) {
+static bool ground_apply_sband_profile(uint8_t profile, uint8_t seq) {
+    if (profile < 1u || profile > 4u) {
+        printf("CMD_FAIL,cmd=%u,seq=%u,reason=invalid_param\n",
+               (unsigned)BALLOON_CMD_SET_SBAND_PROF, (unsigned)seq);
+        return false;
+    }
+
+    sx1280f27_abort();
+    if (sx1280f27_set_profile(profile) != RADIO_STATUS_OK) {
+        printf("CMD_FAIL,cmd=%u,seq=%u,reason=local_sband_profile\n",
+               (unsigned)BALLOON_CMD_SET_SBAND_PROF, (unsigned)seq);
+        return false;
+    }
+
+    return true;
+}
+
+static void ground_send_cmd(uint8_t cmd_id, uint8_t param, uint8_t seq) {
     balloon_cmd_t cmd;
     memset(&cmd, 0, sizeof(cmd));
     cmd.hdr.magic = BALLOON_MAGIC;
     cmd.hdr.msg_type = BALLOON_MSG_CMD;
-    cmd.hdr.seq = g_ground_seq++;
+    cmd.hdr.seq = seq;
     cmd.cmd_id = cmd_id;
     cmd.param = param;
 
@@ -757,7 +797,8 @@ static void ground_send_cmd(uint8_t cmd_id, uint8_t param) {
                (unsigned)cmd_id, (unsigned)param,
                (unsigned)cmd.hdr.seq);
     } else {
-        printf("CMD_FAIL,cmd=%u,reason=tx_error\n", (unsigned)cmd_id);
+        printf("CMD_FAIL,cmd=%u,seq=%u,reason=tx_error\n",
+               (unsigned)cmd_id, (unsigned)cmd.hdr.seq);
     }
 }
 
@@ -807,19 +848,24 @@ static void ground_process_serial(void) {
     if (!cmd_name) return;
 
     uint8_t param = (uint8_t)parse_int_field(g_cmd_buf, "param=", 0);
+    const char *seq_field = find_field(g_cmd_buf, "seq=");
+    uint8_t seq = seq_field ? (uint8_t)atoi(seq_field) : g_ground_seq++;
+    if (seq_field)
+        g_ground_seq = (uint8_t)(seq + 1u);
 
     if (strncmp(cmd_name, "PING", 4) == 0)
-        ground_send_cmd(BALLOON_CMD_PING, 0);
-    else if (strncmp(cmd_name, "SET_SBAND_PROFILE", 17) == 0)
-        ground_send_cmd(BALLOON_CMD_SET_SBAND_PROF, param);
-    else if (strncmp(cmd_name, "START_IMAGE", 11) == 0)
-        ground_send_cmd(BALLOON_CMD_START_IMAGE, 0);
+        ground_send_cmd(BALLOON_CMD_PING, 0, seq);
+    else if (strncmp(cmd_name, "SET_SBAND_PROFILE", 17) == 0) {
+        if (ground_apply_sband_profile(param, seq))
+            ground_send_cmd(BALLOON_CMD_SET_SBAND_PROF, param, seq);
+    } else if (strncmp(cmd_name, "START_IMAGE", 11) == 0)
+        ground_send_cmd(BALLOON_CMD_START_IMAGE, 0, seq);
     else if (strncmp(cmd_name, "START_BULK", 10) == 0)
-        ground_send_cmd(BALLOON_CMD_START_BULK, param);
+        ground_send_cmd(BALLOON_CMD_START_BULK, param, seq);
     else if (strncmp(cmd_name, "STOP", 4) == 0)
-        ground_send_cmd(BALLOON_CMD_STOP, 0);
+        ground_send_cmd(BALLOON_CMD_STOP, 0, seq);
     else if (strncmp(cmd_name, "POWER_SWEEP", 11) == 0)
-        ground_send_cmd(BALLOON_CMD_POWER_SWEEP, param);
+        ground_send_cmd(BALLOON_CMD_POWER_SWEEP, param, seq);
     else
         printf("CMD_ERR,reason=unknown_cmd\n");
 }
