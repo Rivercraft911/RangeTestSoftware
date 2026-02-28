@@ -1,6 +1,3 @@
-"""
-Kawaii-themed matplotlib dashboard for LoRa image transfer stats.
-"""
 import io
 
 from PIL import Image, ImageFile
