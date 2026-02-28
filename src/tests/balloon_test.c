@@ -880,6 +880,7 @@ static int run_flight(void) {
 
 static uint8_t g_ground_sband_profile = SBAND_DEFAULT_PROFILE;
 static uint8_t g_ground_cmd_seq = 0u;
+static uint8_t g_ground_pending_sband_profile = 0u;
 
 static void ground_print_beacon(band_t rx_band, const balloon_beacon_t *bcn,
                                  int16_t rssi_x100, int16_t snr_x100) {
@@ -899,6 +900,20 @@ static void ground_print_beacon(band_t rx_band, const balloon_beacon_t *bcn,
 
 static void ground_print_cmd_ack(const balloon_cmd_ack_t *ack,
                                   int16_t rssi_x100, int16_t snr_x100) {
+    if (ack->cmd_id == BALLOON_CMD_SET_SBAND_PROFILE &&
+        ack->status == 0u &&
+        g_ground_pending_sband_profile >= 1u &&
+        g_ground_pending_sband_profile <= 4u) {
+        (void)band_abort(BAND_SBAND);
+        sleep_ms(2);
+        (void)band_set_profile(BAND_SBAND, g_ground_pending_sband_profile);
+        g_ground_sband_profile = g_ground_pending_sband_profile;
+        printf("PROFILE_SET,profile=%u\n", g_ground_pending_sband_profile);
+    }
+    if (ack->cmd_id == BALLOON_CMD_SET_SBAND_PROFILE) {
+        g_ground_pending_sband_profile = 0u;
+    }
+
     printf("CMD_ACK,cmd=%u,ack_seq=%u,status=%u,"
            "cmd_rssi_x100=%d,cmd_snr_x100=%d,"
            "rssi_x100=%d,snr_x100=%d\n",
@@ -974,9 +989,14 @@ static void ground_handle_rx(band_t rx_band, raw_frame_t *frame) {
             break;
         case BALLOON_MSG_BULK:
             if (frame->length >= BALLOON_BULK_HEADER_SIZE) {
+                const balloon_bulk_t *bulk = (const balloon_bulk_t *)frame->data;
+                uint16_t bulk_len = bulk->data_len;
+                if (bulk_len <= BALLOON_BULK_MAX_PAYLOAD &&
+                    frame->length >= (uint16_t)(BALLOON_BULK_HEADER_SIZE + bulk_len)) {
                 ground_print_bulk(rx_band,
-                    (const balloon_bulk_t *)frame->data,
+                    bulk,
                     frame->rssi_dbm_x100, frame->snr_db_x100);
+                }
             }
             break;
         default:
@@ -995,24 +1015,20 @@ static void ground_handle_rx(band_t rx_band, raw_frame_t *frame) {
 }
 
 static void ground_send_command(balloon_cmd_id_t cmd_id,
-                                 uint8_t param1, uint8_t param2) {
+                                 uint8_t param1, uint8_t param2,
+                                 int seq_override) {
     balloon_cmd_t cmd;
     memset(&cmd, 0, sizeof(cmd));
     cmd.h.magic = BALLOON_MAGIC;
     cmd.h.msg_type = BALLOON_MSG_CMD;
-    cmd.h.seq = g_ground_cmd_seq++;
+    cmd.h.seq = (seq_override >= 0) ? (uint8_t)seq_override : g_ground_cmd_seq++;
     cmd.cmd_id = (uint8_t)cmd_id;
     cmd.param1 = param1;
     cmd.param2 = param2;
 
-    /* If profile change, update local S-Band profile first */
     if (cmd_id == BALLOON_CMD_SET_SBAND_PROFILE &&
         param1 >= 1u && param1 <= 4u) {
-        (void)band_abort(BAND_SBAND);
-        sleep_ms(2);
-        (void)band_set_profile(BAND_SBAND, param1);
-        g_ground_sband_profile = param1;
-        printf("PROFILE_SET,profile=%u\n", param1);
+        g_ground_pending_sband_profile = param1;
     }
 
     uhf_send_with_callsign(&cmd, sizeof(cmd));
@@ -1045,24 +1061,25 @@ static void ground_handle_serial_cmd(void) {
     const char *cmd_name = find_field(g_cmd_buf, "cmd=");
     if (!cmd_name) return;
 
+    int seq = parse_int_field(g_cmd_buf, "seq=", -1);
     int param1 = parse_int_field(g_cmd_buf, "param1=", 0);
     int param2 = parse_int_field(g_cmd_buf, "param2=", 0);
 
     if (strncmp(cmd_name, "PING", 4) == 0) {
-        ground_send_command(BALLOON_CMD_PING, 0, 0);
+        ground_send_command(BALLOON_CMD_PING, 0, 0, seq);
     } else if (strncmp(cmd_name, "SET_SBAND_PROFILE", 17) == 0) {
         ground_send_command(BALLOON_CMD_SET_SBAND_PROFILE,
-                            (uint8_t)param1, 0);
+                            (uint8_t)param1, 0, seq);
     } else if (strncmp(cmd_name, "START_IMAGE", 11) == 0) {
-        ground_send_command(BALLOON_CMD_START_IMAGE, (uint8_t)param1, 0);
+        ground_send_command(BALLOON_CMD_START_IMAGE, (uint8_t)param1, 0, seq);
     } else if (strncmp(cmd_name, "START_BULK", 10) == 0) {
         ground_send_command(BALLOON_CMD_START_BULK,
-                            (uint8_t)param1, (uint8_t)param2);
+                            (uint8_t)param1, (uint8_t)param2, seq);
     } else if (strncmp(cmd_name, "STOP", 4) == 0) {
-        ground_send_command(BALLOON_CMD_STOP, 0, 0);
+        ground_send_command(BALLOON_CMD_STOP, 0, 0, seq);
     } else if (strncmp(cmd_name, "POWER_SWEEP", 11) == 0) {
         ground_send_command(BALLOON_CMD_POWER_SWEEP,
-                            (uint8_t)param1, (uint8_t)param2);
+                            (uint8_t)param1, (uint8_t)param2, seq);
     } else if (strncmp(cmd_name, "IMG_NACK", 8) == 0) {
         /* Parse hex list of 16-bit packet numbers */
         const char *hex = find_field(g_cmd_buf, "hex=");

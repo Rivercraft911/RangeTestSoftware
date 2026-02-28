@@ -150,12 +150,16 @@ CMD_NAMES = {
 }
 
 
-def build_cmd_line(cmd_name, seq=0, param1=0, param2=0):
-    return f"CMD,cmd={cmd_name},param1={param1},param2={param2},seq={seq}\n"
+def build_cmd_line(cmd_name, seq=None, param1=0, param2=0):
+    line = f"CMD,cmd={cmd_name},param1={param1},param2={param2}"
+    if seq is not None:
+        line += f",seq={seq}"
+    return line + "\n"
 
 
 def build_nack_line(missing_pkts):
-    hex_data = "".join(f"{p:04x}" for p in missing_pkts)
+    # Packet IDs are decoded into native uint16_t values on the Pico.
+    hex_data = "".join(f"{p & 0xff:02x}{(p >> 8) & 0xff:02x}" for p in missing_pkts)
     return f"CMD,cmd=IMG_NACK,hex={hex_data}\n"
 
 
