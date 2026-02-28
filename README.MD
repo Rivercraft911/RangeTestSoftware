@@ -5,7 +5,7 @@ LoRa range testing firmware for Raspberry Pi Pico2. Supports S-Band (SX1280) and
 ## Build
 
 ```bash
-cd build && cmake .. && make <target>
+cd build && cmake .. && ninja <target>
 ```
 
 | Target | Description |

@@ -13,6 +13,13 @@ tools/*.pyc
 tools/received_*.jpg
 tools/received_*_stats.png
 tools/range_listener.csv
+groundstation/.venv/
+groundstation/__pycache__/
+groundstation/*.pyc
+groundstation/data/*.csv
+
+# Generated headers
+include/data/balloon_image.h
 
 # Claude Code
 CLAUDE.md
