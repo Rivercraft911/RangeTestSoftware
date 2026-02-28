@@ -1406,7 +1406,7 @@ static bool run_observer_loop(void) {
     }
 }
 
-int main(void) {
+int range_test_node_run(void) {
     stdio_init_all();
     sleep_ms(1200);
 
@@ -1483,3 +1483,9 @@ int main(void) {
         sleep_ms(10);
     }
 }
+
+#ifndef RANGE_NODE_NO_MAIN
+int main(void) {
+    return range_test_node_run();
+}
+#endif
