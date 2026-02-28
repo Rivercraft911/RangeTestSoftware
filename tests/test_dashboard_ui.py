@@ -183,10 +183,11 @@ class DashboardUiTests(unittest.TestCase):
             bulk_total=117,
         )
         update_dashboard(fig, axes, active, 1)
-        self.assertEqual(axes["pkt_loss"].get_title(), "")
-        self.assertEqual(axes["progress"].get_title(), "Transfer Progress")
+        self.assertEqual(axes["pkt_loss"].get_title(), "Beacon Age (s)")
+        self.assertEqual(axes["progress"].get_title(), "Command Success")
         self.assertEqual(axes["sb_snr"].get_title(), "S-Band SNR")
         self.assertEqual(axes["link_margin"].get_title(), "Link Margin")
+        self.assertEqual(axes["pkt_stats"].get_title(), "Packet Coverage")
 
 
 if __name__ == "__main__":

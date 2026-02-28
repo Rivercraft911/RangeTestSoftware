@@ -284,6 +284,20 @@ def _derive_dashboard_metrics(snap, sband_profile):
             last_command_rtt_ms = command.rtt_ms
             break
 
+    command_ok = sum(1 for command in snap["commands"] if command.acked)
+    command_fail = sum(
+        1 for command in snap["commands"]
+        if command.failed and not command.acked
+    )
+    command_pending = sum(
+        1 for command in snap["commands"]
+        if not command.acked and not command.failed
+    )
+    completed = command_ok + command_fail
+    command_success_pct = (
+        (command_ok / completed) * 100.0 if completed > 0 else None
+    )
+
     return {
         "missing_count": missing,
         "packet_loss_pct": packet_loss_pct,
@@ -298,6 +312,10 @@ def _derive_dashboard_metrics(snap, sband_profile):
         "throughput_avg_kbps": throughput_avg,
         "throughput_trend": _throughput_trend(throughput),
         "last_command_rtt_ms": last_command_rtt_ms,
+        "command_ok": command_ok,
+        "command_fail": command_fail,
+        "command_pending": command_pending,
+        "command_success_pct": command_success_pct,
         "sband_floor": sband_floor,
         "uhf_margin_now_db": uhf_margin_series[-1] if uhf_margin_series else None,
         "sband_margin_now_db": sband_margin_series[-1] if sband_margin_series else None,
@@ -317,8 +335,20 @@ def _plot_rssi(ax, data, color, title, floor):
 
     x = list(range(len(data)))
     avg = sum(data) / len(data)
+    lo, hi = _stable_ylim(data, pad_frac=0.22, min_range=10.0)
+    strongest = max(data)
+    weakest = min(data)
+    upper = min(-1.0, max(hi, strongest + 8.0))
+    lower = min(lo, weakest - 6.0)
+    ax.set_ylim(lower, upper)
     ax.plot(x, data, color=color, linewidth=LINE_WIDTH, alpha=0.95)
-    ax.fill_between(x, data, color=color, alpha=FILL_ALPHA)
+    ax.fill_between(
+        x,
+        data,
+        [lower] * len(x),
+        color=color,
+        alpha=max(FILL_ALPHA, 0.09),
+    )
     _draw_reference_line(ax, avg, color, style="--")
     _draw_reference_line(ax, floor, APPLE_RED, style=":", alpha=FLOOR_LINE_ALPHA)
     _annotate_metric(
@@ -328,9 +358,6 @@ def _plot_rssi(ax, data, color, title, floor):
         color,
         _margin_color(current, floor),
     )
-
-    lo, hi = _stable_ylim(data, pad_frac=0.22, min_range=10.0)
-    ax.set_ylim(min(lo, floor - 5), hi)
 
 
 def _plot_snr(ax, data, color, title, empty_message="Waiting for samples"):
@@ -382,126 +409,151 @@ def _plot_throughput(ax, data, metrics):
     ax.set_ylim(0, max(data) * 1.35 or 1)
 
 
-def _plot_packet_loss_gauge(ax, snap, metrics):
+def _plot_beacon_age(ax, metrics):
     ax.clear()
     ax.set_facecolor(SURFACE)
-    ax.set_title("", pad=0)
-    ax.set_xlim(0, 1)
-    ax.set_ylim(0, 1)
-    ax.axis("off")
-    ax.text(
-        0.5, 0.56, "RANGE TEST",
-        transform=ax.transAxes,
-        fontsize=12.5,
-        color=INK,
-        ha="center",
-        va="center",
-        fontfamily="monospace",
-    )
-    ax.text(
-        0.5, 0.43, "DASHBOARD",
-        transform=ax.transAxes,
-        fontsize=12.5,
-        color=APPLE_BLUE,
-        ha="center",
-        va="center",
-        fontfamily="monospace",
-    )
-    ax.add_patch(
-        matplotlib.patches.Rectangle(
-            (0, 0), 1, 1,
+    ax.set_title("Beacon Age (s)", fontsize=9.2, pad=3)
+    ax.grid(True, axis="y", alpha=0.34, linewidth=0.28, linestyle="--")
+    ax.grid(False, axis="x")
+    ax.set_ylabel("seconds")
+    ax.yaxis.set_major_locator(matplotlib.ticker.MaxNLocator(4))
+    ax.tick_params(length=2.5, width=0.6, colors=INK, pad=2)
+    ax.set_axisbelow(True)
+    for spine in ax.spines.values():
+        spine.set_color(SPINE)
+        spine.set_linewidth(0.7)
+
+    age = metrics["beacon_age_s"]
+    ax.set_xticks([0])
+    ax.set_xticklabels(["latest"])
+    ax.set_xlim(-0.45, 0.45)
+    if age is None:
+        ax.set_ylim(0, 12)
+        ax.bar([0], [0], color=TRACK, width=0.34, edgecolor=SPINE,
+               linewidth=0.7, alpha=0.9)
+        ax.text(
+            0.5, 0.10, "no beacon",
             transform=ax.transAxes,
-            fill=False,
-            edgecolor=SPINE,
-            linewidth=0.7,
+            ha="center", va="bottom",
+            color=MUTED, fontsize=6.4,
+            fontfamily="monospace",
+            clip_on=True,
         )
+        return
+
+    age_color = (
+        APPLE_GREEN if age < 5
+        else (APPLE_ORANGE if age < 10 else APPLE_RED)
+    )
+    ax.axhline(5, color=APPLE_GREEN, linewidth=REF_LINE_WIDTH,
+               linestyle="--", alpha=0.28)
+    ax.axhline(10, color=APPLE_ORANGE, linewidth=REF_LINE_WIDTH,
+               linestyle="--", alpha=0.28)
+    ax.bar([0], [age], color=age_color, width=0.34,
+           edgecolor=SPINE, linewidth=0.7, alpha=0.9, zorder=2)
+    ax.set_ylim(0, max(12, age * 1.30))
+    ax.text(
+        0, age + max(0.28, age * 0.035), f"{age:.1f}s",
+        ha="center", va="bottom",
+        color=INK, fontsize=6.6,
+        fontfamily="monospace",
+        clip_on=True,
+    )
+    ax.text(
+        0.98, 0.08, metrics["freshness"],
+        transform=ax.transAxes,
+        ha="right", va="bottom",
+        color=age_color, fontsize=5.6,
+        fontfamily="monospace",
+        clip_on=True,
     )
 
 
-def _plot_progress(ax, snap, metrics):
+def _plot_command_success(ax, metrics):
     ax.clear()
     ax.set_facecolor(SURFACE)
-    ax.set_title("Transfer Progress", fontsize=9.2, pad=3)
-    ax.set_xlim(0, 1)
-    ax.set_ylim(0, 1)
-    ax.axis("off")
+    ax.set_title("Command Success", fontsize=9.2, pad=3)
+    ax.set_xticks([])
+    ax.set_yticks([])
+    ax.grid(False)
+    for spine in ax.spines.values():
+        spine.set_color(SPINE)
+        spine.set_linewidth(0.7)
 
-    pct = metrics["transfer_progress_pct"]
-    total = snap["bulk_total"]
-    received = snap["bulk_received_count"]
+    raw_labels = ["OK", "FAIL", "PEND"]
+    raw_vals = [
+        metrics["command_ok"],
+        metrics["command_fail"],
+        metrics["command_pending"],
+    ]
+    raw_colors = [APPLE_GREEN, APPLE_RED, APPLE_BLUE]
+    total = sum(raw_vals)
 
-    if pct is not None:
-        headline = f"{pct:0.1f}%"
-        footer = f"{received} / {total} PKTS"
-        active_segments = int(round((pct / 100.0) * 28))
+    if total <= 0:
+        ax.pie(
+            [1],
+            colors=[TRACK],
+            startangle=90,
+            counterclock=False,
+            radius=0.76,
+            wedgeprops=dict(width=0.28, edgecolor=SURFACE, linewidth=1.0),
+        )
+        ax.text(
+            0.5, 0.56, "NONE",
+            transform=ax.transAxes,
+            ha="center", va="center",
+            color=INK, fontsize=8.4, fontfamily="monospace",
+        )
+        ax.text(
+            0.5, 0.43, "no cmds",
+            transform=ax.transAxes,
+            ha="center", va="center",
+            color=MUTED, fontsize=5.6, fontfamily="monospace",
+        )
     else:
-        headline = "N/A"
-        footer = "STANDBY"
-        active_segments = 0
-
-    start_x = 0.045
-    total_width = 0.91
-    gap = 0.005
-    segments = 28
-    seg_w = (total_width - gap * (segments - 1)) / segments
-    seg_y = 0.405
-    seg_h = 0.17
-
-    ax.add_patch(
-        matplotlib.patches.Rectangle(
-            (start_x - 0.012, seg_y - 0.025),
-            total_width + 0.024,
-            seg_h + 0.05,
+        vals = []
+        colors = []
+        for value, color in zip(raw_vals, raw_colors):
+            if value > 0:
+                vals.append(value)
+                colors.append(color)
+        ax.pie(
+            vals,
+            colors=colors,
+            startangle=90,
+            counterclock=False,
+            radius=0.76,
+            wedgeprops=dict(width=0.28, edgecolor=SURFACE, linewidth=1.0),
+        )
+        success_pct = metrics["command_success_pct"]
+        center_text = (
+            f"{success_pct:.0f}%"
+            if success_pct is not None
+            else "N/A"
+        )
+        ax.text(
+            0.5, 0.56, center_text,
             transform=ax.transAxes,
-            fill=False,
-            edgecolor=SPINE,
-            linewidth=0.7,
+            ha="center", va="center",
+            color=INK, fontsize=8.6, fontfamily="monospace",
         )
-    )
-
-    for index in range(segments):
-        x = start_x + index * (seg_w + gap)
-        color = APPLE_TEAL if index < active_segments else TRACK
-        alpha = 0.95 if index < active_segments else 1.0
-        ax.add_patch(
-            matplotlib.patches.Rectangle(
-                (x, seg_y),
-                seg_w,
-                seg_h,
-                transform=ax.transAxes,
-                linewidth=0,
-                facecolor=color,
-                alpha=alpha,
-            )
-        )
-
-    ax.text(
-        0.5, 0.66, headline,
-        transform=ax.transAxes,
-        fontsize=11.2,
-        color=APPLE_TEAL,
-        ha="center",
-        va="center",
-        fontfamily="monospace",
-    )
-    ax.text(
-        0.5, 0.18, footer,
-        transform=ax.transAxes,
-        fontsize=6.2,
-        color=MUTED,
-        ha="center",
-        va="center",
-        fontfamily="monospace",
-    )
-    ax.add_patch(
-        matplotlib.patches.Rectangle(
-            (0, 0), 1, 1,
+        ax.text(
+            0.5, 0.43, "success",
             transform=ax.transAxes,
-            fill=False,
-            edgecolor=SPINE,
-            linewidth=0.7,
+            ha="center", va="center",
+            color=MUTED, fontsize=5.6, fontfamily="monospace",
         )
-    )
+
+    stat_x = [0.18, 0.50, 0.82]
+    for x, label, value, color in zip(stat_x, raw_labels, raw_vals, raw_colors):
+        ax.text(
+            x, 0.02, f"{label} {value}",
+            transform=ax.transAxes,
+            ha="center", va="bottom",
+            color=color, fontsize=5.2,
+            fontfamily="monospace",
+            clip_on=True,
+        )
 
 
 def _plot_link_margin(ax, metrics):
@@ -528,56 +580,89 @@ def _plot_link_margin(ax, metrics):
     ax.set_ylim(lo, hi)
 
 
-def _plot_packet_stats(ax, snap, metrics):
+def _plot_packet_coverage(ax, snap):
     ax.clear()
     ax.set_facecolor(SURFACE)
-    ax.set_title("Packet Stats", fontsize=9.2, pad=3)
+    ax.set_title("Packet Coverage", fontsize=9.2, pad=3)
     ax.grid(True, axis="y", alpha=0.34, linewidth=0.28, linestyle="--")
     ax.grid(False, axis="x")
-    ax.set_ylabel("Packets")
-    ax.yaxis.set_major_locator(matplotlib.ticker.MaxNLocator(5))
+    ax.set_ylabel("%")
+    ax.yaxis.set_major_locator(matplotlib.ticker.MaxNLocator(4))
     ax.tick_params(length=2.5, width=0.6, colors=INK, pad=2)
+    ax.set_axisbelow(True)
     for spine in ax.spines.values():
         spine.set_color(SPINE)
         spine.set_linewidth(0.7)
 
     total = snap["bulk_total"]
-    received = snap["bulk_received_count"]
-    missing = metrics["missing_count"]
+    keys = snap["bulk_received_keys"]
+    if total <= 0:
+        ax.set_xticks([1])
+        ax.set_xticklabels(["1"])
+        ax.set_xlim(0.5, 1.5)
+        ax.set_ylim(0, 100)
+        ax.vlines(1, 0, 0.6, color=SPINE, linewidth=1.1, alpha=0.55)
+        ax.scatter([1], [0.6], s=20, color=TRACK, edgecolors=SPINE,
+                   linewidths=0.6, zorder=3)
+        ax.text(
+            0.5, 0.08, "no transfer",
+            transform=ax.transAxes,
+            fontsize=5.8,
+            color=MUTED,
+            ha="center",
+            va="bottom",
+            fontfamily="monospace",
+            clip_on=True,
+        )
+        return
 
-    bars = ax.bar(
-        ["Received", "Missing"],
-        [received, missing],
-        color=[APPLE_GREEN, APPLE_RED],
-        alpha=0.82,
-        edgecolor=SPINE,
-        linewidth=0.8,
-        width=0.48,
-    )
-    for bar, value in zip(bars, [received, missing]):
-        if value > 0:
-            ax.text(
-                bar.get_x() + bar.get_width() / 2,
-                bar.get_height() + max(total * 0.015, 0.45),
-                str(value),
-                ha="center",
-                va="bottom",
-                color=INK,
-                fontsize=6.8,
-                fontfamily="monospace",
-            )
+    bins = max(1, min(8, total))
+    xs = []
+    values = []
+    colors = []
+    for idx in range(bins):
+        start = (total * idx) // bins
+        end = (total * (idx + 1)) // bins
+        span = max(1, end - start)
+        hit_count = sum(1 for packet_idx in keys if start <= packet_idx < end)
+        pct = (hit_count / span) * 100.0
+        values.append(pct)
+        xs.append(idx + 1)
+        if pct >= 99.9:
+            colors.append(APPLE_GREEN)
+        elif pct > 0:
+            colors.append(APPLE_ORANGE)
+        else:
+            colors.append(APPLE_RED)
 
-    subtitle = "counts" if total > 0 else "waiting"
+    ax.axhline(100, color=MUTED, linewidth=0.45, linestyle=":", alpha=0.32)
+    ax.set_xticks(xs)
+    ax.set_xlim(0.5, bins + 0.5)
+    ax.set_ylim(0, 104)
+    ax.vlines(xs, 0, values, colors=colors, linewidth=1.55, alpha=0.9, zorder=2)
+    ax.scatter(xs, values, s=28, c=colors, edgecolors=SPINE,
+               linewidths=0.55, zorder=3)
+
     ax.text(
-        0.5, 0.97, subtitle,
+        0.98, 0.13, "chunk % received",
         transform=ax.transAxes,
-        fontsize=5.8,
+        fontsize=5.4,
         color=MUTED,
-        ha="center",
-        va="top",
+        ha="right",
+        va="bottom",
         fontfamily="monospace",
+        clip_on=True,
     )
-    ax.set_ylim(0, max(total, received, 4) * 1.18)
+    ax.text(
+        0.98, 0.05, f"{len(keys)} / {total} packets",
+        transform=ax.transAxes,
+        fontsize=5.4,
+        color=MUTED,
+        ha="right",
+        va="bottom",
+        fontfamily="monospace",
+        clip_on=True,
+    )
 
 
 def init_dashboard():
@@ -615,7 +700,7 @@ def update_dashboard(fig, axes, snap, sband_profile=1):
         "S-Band RSSI",
         metrics["sband_floor"],
     )
-    _plot_packet_loss_gauge(axes["pkt_loss"], snap, metrics)
+    _plot_beacon_age(axes["pkt_loss"], metrics)
     _plot_snr(axes["uhf_snr"], snap["uhf_snr"], APPLE_YELLOW, "UHF SNR")
     _plot_snr(
         axes["sb_snr"],
@@ -624,10 +709,10 @@ def update_dashboard(fig, axes, snap, sband_profile=1):
         "S-Band SNR",
         empty_message="No S-Band bulk yet",
     )
-    _plot_progress(axes["progress"], snap, metrics)
+    _plot_command_success(axes["progress"], metrics)
     _plot_throughput(axes["throughput"], snap["throughput"], metrics)
     _plot_link_margin(axes["link_margin"], metrics)
-    _plot_packet_stats(axes["pkt_stats"], snap, metrics)
+    _plot_packet_coverage(axes["pkt_stats"], snap)
 
     fig.canvas.draw_idle()
     fig.canvas.flush_events()
