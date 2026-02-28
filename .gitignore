@@ -1,2 +1,18 @@
 build
 !.vscode/*
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Python
+tools/.venv/
+tools/__pycache__/
+tools/*.pyc
+tools/received_*.jpg
+tools/received_*_stats.png
+tools/range_listener.csv
+
+# Claude Code
+CLAUDE.md
