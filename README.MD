@@ -1,6 +1,6 @@
 # RangeTestSoftware
 
-LoRa range testing firmware for Raspberry Pi Pico2. Supports S-Band (SX1280, 2.4 GHz) and UHF (RFM98PW, 438 MHz).
+LoRa range testing firmware for Raspberry Pi Pico2. Supports S-Band (SX1280) and UHF (RFM98PW).
 
 ## Build
 
@@ -22,9 +22,9 @@ cd build && cmake .. && make <target>
 Flash `ImageTransfer.uf2` on both Picos.
 
 ```bash
-python3 tools/image_txrx.py receive --port /dev/tty.usbmodemXXXX
-
-python3 tools/image_txrx.py send --port /dev/tty.usbmodemXXXX --image photo.jpg
+cd tools
+python3 -m venv .venv
+source .venv/bin/activate
+pip install pyserial Pillow matplotlib rich
+python3 image_txrx.py
 ```
-
-Deps: `pip install pyserial Pillow`

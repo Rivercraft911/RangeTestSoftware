@@ -142,7 +142,7 @@ static bool send_lora_packet(const image_packet_t *pkt) {
             sx1280f27_abort();
             return false;
         }
-        tight_loop_contents();
+        sleep_us(100);
     }
 }
 
@@ -337,6 +337,7 @@ static void handle_rx_packet(const radio_rx_frame_t *frame) {
     if (frame->length < IMAGE_HEADER_SIZE) return;
 
     image_packet_t pkt;
+    memset(&pkt, 0, sizeof(pkt));
     memcpy(&pkt, frame->data, IMAGE_HEADER_SIZE);
     if (pkt.magic != IMAGE_PACKET_MAGIC) return;
 
@@ -345,6 +346,9 @@ static void handle_rx_packet(const radio_rx_frame_t *frame) {
     if (data_bytes > 0u) {
         memcpy(pkt.data, &frame->data[IMAGE_HEADER_SIZE], data_bytes);
     }
+
+    // Use the actual received length, not just the header's claimed length
+    uint8_t print_len = (pkt.data_len <= data_bytes) ? pkt.data_len : data_bytes;
 
     static uint16_t rx_pkt_counter = 0u;
 
@@ -364,10 +368,10 @@ static void handle_rx_packet(const radio_rx_frame_t *frame) {
         }
         printf("IMG_DATA,pkt=%u,len=%u,rssi=%d,snr=%d,hex=",
                (unsigned)pkt.pkt_num,
-               (unsigned)pkt.data_len,
+               (unsigned)print_len,
                (int)frame->rssi_dbm_x100,
                (int)frame->snr_db_x100);
-        for (uint8_t i = 0u; i < pkt.data_len; ++i) {
+        for (uint8_t i = 0u; i < print_len; ++i) {
             printf("%02X", pkt.data[i]);
         }
         printf("\n");

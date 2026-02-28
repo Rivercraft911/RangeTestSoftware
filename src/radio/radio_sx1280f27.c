@@ -34,7 +34,8 @@ enum {
     SX1280_CMD_GET_PACKET_STATUS = 0x1D,
     SX1280_CMD_SET_DIO_IRQ_PARAMS = 0x8D,
     SX1280_CMD_GET_IRQ_STATUS = 0x15,
-    SX1280_CMD_CLEAR_IRQ_STATUS = 0x97
+    SX1280_CMD_CLEAR_IRQ_STATUS = 0x97,
+    SX1280_CMD_SET_REGULATOR_MODE = 0x96
 };
 
 enum {
@@ -984,6 +985,17 @@ radio_status_t sx1280f27_init(void) {
     g_sx1280.rx_valid = false;
     g_sx1280.state = SX1280_STATE_IDLE;
     g_sx1280.initialized = true;
+
+    // Enable DC-DC converter (opcode 0x96, param 0x01). Must be called in
+    // STDBY_RC. Requires the inductor on the LoRa128XF27 module to be
+    // populated. Non-fatal if it fails — falls back to LDO.
+    {
+        const uint8_t dc_dc_enable = 0x01u;
+        radio_status_t dc_st = sx1280_write_cmd(SX1280_CMD_SET_REGULATOR_MODE, &dc_dc_enable, 1u);
+        if (dc_st != RADIO_STATUS_OK) {
+            SX1280_LOG_WARN("init: SetRegulatorMode(DC-DC) failed st=%d, continuing with LDO", (int)dc_st);
+        }
+    }
 
     st = sx1280_apply_active_profile();
     if (st != RADIO_STATUS_OK) {
