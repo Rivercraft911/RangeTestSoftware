@@ -1,12 +1,7 @@
-"""
-Live dashboard for balloon link-budget testing.
-
-Clean light scientific theme with Apple rainbow accent colors.
-2x3 matplotlib grid: UHF RSSI, S-Band RSSI, Status, UHF SNR, Throughput, Packet Stats.
-Separate image preview window for progressive rendering during transfer.
-"""
+"""Live dashboard for balloon link-budget testing."""
 
 import io
+import textwrap
 import time
 
 import matplotlib
@@ -15,90 +10,88 @@ from PIL import Image, ImageFile
 
 ImageFile.LOAD_TRUNCATED_IMAGES = True
 
-# -- Light scientific theme --
-BG    = "#FFFFFF"
-FACE  = "#F7F8FA"
-TEXT  = "#1A1A2E"
-GRID  = "#E2E4E8"
-SPINE = "#C0C4CC"
+SURFACE = "#0C1420"
+INK = "#D7E1EC"
+GRID = "#223242"
+SPINE = "#31475C"
+MUTED = "#8FA0B4"
+TRACK = "#152232"
+PANEL_STRIP = "#101B2A"
+MONO_STACK = [
+    "JetBrains Mono",
+    "SF Mono",
+    "Menlo",
+    "Monaco",
+    "Consolas",
+    "Liberation Mono",
+    "DejaVu Sans Mono",
+    "monospace",
+]
 
-# -- Apple rainbow accents (vivid on white) --
-GREEN  = "#2E9E45"
-YELLOW = "#D4A017"
-ORANGE = "#E8590C"
-RED    = "#DC3545"
-PURPLE = "#7B2D8E"
-BLUE   = "#1A73E8"
+APPLE_GREEN = "#65B27E"
+APPLE_YELLOW = "#D0B067"
+APPLE_ORANGE = "#C98B4F"
+APPLE_RED = "#D46A76"
+APPLE_VIOLET = "#8B84D1"
+APPLE_BLUE = "#78A6D2"
+APPLE_TEAL = "#69AEBE"
 
-# Sensitivity floors (dBm)
 UHF_FLOOR = -130
 SBAND_FLOORS = {1: -117, 2: -120, 3: -126, 4: -129}
 
 BULK_DATA_PER_PKT = 243  # BALLOON_BULK_DATA_MAX
 
-LINE_WIDTH = 1.6
-FILL_ALPHA = 0.07
-REF_LINE_WIDTH = 0.8
-REF_LINE_ALPHA = 0.45
-FLOOR_LINE_ALPHA = 0.35
+LINE_WIDTH = 1.05
+FILL_ALPHA = 0.018
+REF_LINE_WIDTH = 0.5
+REF_LINE_ALPHA = 0.32
+FLOOR_LINE_ALPHA = 0.22
 PILL_BBOX = dict(
-    boxstyle="round,pad=0.18,rounding_size=0.25",
-    fc=BG,
-    ec="none",
-    alpha=0.72,
+    boxstyle="square,pad=0.12",
+    fc=PANEL_STRIP,
+    ec=SPINE,
+    alpha=1.0,
 )
-STATUS_BADGE_BBOX = dict(
-    boxstyle="round,pad=0.22,rounding_size=0.35",
-    fc=BG,
-    ec="none",
-    alpha=0.88,
-)
-CARD_BG = "#FBFCFE"
-CARD_EDGE = "#D8DEE8"
-CARD_MUTED = "#6B7280"
-CARD_SOFT = "#EEF3F8"
 
 
 def apply_dark_theme():
-    """Apply the light scientific theme globally."""
+    """Apply a restrained mission-console theme globally."""
     plt.rcParams.update({
-        "figure.facecolor": BG,
-        "axes.facecolor": FACE,
-        "text.color": TEXT,
-        "axes.labelcolor": TEXT,
-        "xtick.color": TEXT,
-        "ytick.color": TEXT,
+        "figure.facecolor": SURFACE,
+        "axes.facecolor": SURFACE,
+        "text.color": INK,
+        "axes.labelcolor": INK,
+        "xtick.color": INK,
+        "ytick.color": INK,
         "axes.grid": True,
         "grid.color": GRID,
-        "grid.alpha": 0.45,
-        "grid.linewidth": 0.4,
-        "grid.linestyle": "-",
-        "axes.spines.top": False,
-        "axes.spines.right": False,
+        "grid.alpha": 0.34,
+        "grid.linewidth": 0.28,
+        "grid.linestyle": "--",
+        "axes.spines.top": True,
+        "axes.spines.right": True,
         "axes.edgecolor": SPINE,
         "axes.linewidth": 0.8,
-        "font.family": "sans-serif",
-        "font.sans-serif": [
-            "Helvetica Neue", "Arial", "SF Pro Display", "sans-serif"
-        ],
-        "font.size": 10,
-        "axes.titlesize": 13,
-        "axes.titleweight": "bold",
-        "axes.labelsize": 10,
-        "xtick.labelsize": 9,
-        "ytick.labelsize": 9,
+        "font.family": "monospace",
+        "font.monospace": MONO_STACK,
+        "font.size": 7.8,
+        "axes.titlesize": 9.2,
+        "axes.titleweight": "normal",
+        "axes.labelsize": 7.1,
+        "xtick.labelsize": 6.2,
+        "ytick.labelsize": 6.2,
         "lines.linewidth": LINE_WIDTH,
         "lines.antialiased": True,
         "legend.frameon": True,
-        "legend.framealpha": 0.9,
-        "legend.facecolor": BG,
+        "legend.framealpha": 0.95,
+        "legend.facecolor": PANEL_STRIP,
         "legend.edgecolor": SPINE,
-        "legend.fontsize": 9,
-        "axes.titlepad": 10,
-        "axes.labelpad": 8,
+        "legend.fontsize": 6.2,
+        "axes.titlepad": 4,
+        "axes.labelpad": 3.5,
         "figure.dpi": 150,
         "savefig.dpi": 200,
-        "savefig.facecolor": BG,
+        "savefig.facecolor": SURFACE,
         "axes.unicode_minus": False,
     })
 
@@ -106,10 +99,10 @@ def apply_dark_theme():
 def _margin_color(rssi: float, floor: float) -> str:
     margin = rssi - floor
     if margin > 10:
-        return GREEN
+        return APPLE_GREEN
     if margin > 3:
-        return ORANGE
-    return RED
+        return APPLE_ORANGE
+    return APPLE_RED
 
 
 def _stable_ylim(data, pad_frac=0.15, min_range=5.0):
@@ -128,16 +121,44 @@ def _safe_set_window_title(fig, title: str):
         manager.set_window_title(title)
 
 
-def _style_timeseries_axis(ax, title, ylabel):
+def _draw_empty_state(ax, title, message):
     ax.clear()
-    ax.set_facecolor(FACE)
-    ax.set_title(title, fontsize=13)
-    ax.set_xlabel("Sample")
-    ax.set_ylabel(ylabel)
-    ax.grid(True, alpha=0.45, linewidth=0.4)
+    ax.set_facecolor(SURFACE)
+    ax.set_title(title, fontsize=9.2, pad=3)
+    ax.set_xlim(0, 1)
+    ax.set_ylim(0, 1)
+    ax.set_xticks([])
+    ax.set_yticks([])
+    ax.grid(False)
     for spine in ax.spines.values():
         spine.set_color(SPINE)
         spine.set_linewidth(0.8)
+    ax.text(
+        0.5, 0.5, message,
+        transform=ax.transAxes,
+        fontsize=7.4,
+        color=MUTED,
+        ha="center",
+        va="center",
+    )
+
+
+def _style_timeseries_axis(ax, title, ylabel):
+    ax.clear()
+    ax.set_axis_on()
+    ax.set_facecolor(SURFACE)
+    ax.set_title(title, fontsize=9.2, pad=3)
+    ax.set_xlabel("Sample")
+    ax.set_ylabel(ylabel)
+    ax.grid(True, alpha=0.34, linewidth=0.28, linestyle="--")
+    ax.margins(x=0.025)
+    ax.xaxis.set_major_locator(matplotlib.ticker.MaxNLocator(4))
+    ax.yaxis.set_major_locator(matplotlib.ticker.MaxNLocator(4))
+    ax.tick_params(length=2.5, width=0.6, colors=INK, pad=2)
+    ax.set_axisbelow(True)
+    for spine in ax.spines.values():
+        spine.set_color(SPINE)
+        spine.set_linewidth(0.7)
 
 
 def _annotate_metric(ax, left_text, right_text, left_color, right_color):
@@ -145,21 +166,25 @@ def _annotate_metric(ax, left_text, right_text, left_color, right_color):
         ax.text(
             0.02, 0.95, left_text,
             transform=ax.transAxes,
-            fontsize=8.5,
+            fontsize=6.0,
             color=left_color,
             va="top",
             ha="left",
             bbox=PILL_BBOX,
+            clip_on=True,
+            fontfamily="monospace",
         )
     if right_text:
         ax.text(
             0.98, 0.95, right_text,
             transform=ax.transAxes,
-            fontsize=8.5,
+            fontsize=6.0,
             color=right_color,
             va="top",
             ha="right",
             bbox=PILL_BBOX,
+            clip_on=True,
+            fontfamily="monospace",
         )
 
 
@@ -167,32 +192,24 @@ def _draw_reference_line(
     ax,
     y,
     color,
-    label,
     style="--",
     alpha=REF_LINE_ALPHA,
+    label=None,
     text_pos=(0.98, 0.02),
     ha="right",
     va="bottom",
 ):
-    ax.axhline(y=y, color=color, linewidth=REF_LINE_WIDTH, linestyle=style,
-               alpha=alpha)
-    ax.text(
-        text_pos[0], text_pos[1], label,
-        transform=ax.transAxes,
-        fontsize=8,
-        color=color,
-        alpha=min(alpha + 0.2, 0.8),
-        va=va,
-        ha=ha,
-    )
-
-
-def _format_series_stat(data, unit="", precision=1):
-    if not data:
-        return "N/A"
-    fmt = f"{{:.{precision}f}}"
-    suffix = f" {unit}" if unit else ""
-    return f"{fmt.format(data[-1])} / {fmt.format(sum(data) / len(data))}{suffix}"
+    ax.axhline(y=y, color=color, linewidth=REF_LINE_WIDTH, linestyle=style, alpha=alpha)
+    if label:
+        ax.text(
+            text_pos[0], text_pos[1], label,
+            transform=ax.transAxes,
+            fontsize=6.0,
+            color=color,
+            alpha=min(alpha + 0.2, 0.8),
+            va=va,
+            ha=ha,
+        )
 
 
 def _throughput_trend(data):
@@ -210,121 +227,6 @@ def _throughput_trend(data):
     return "steady"
 
 
-def _card_patch(ax, x, y, w, h, facecolor=CARD_BG, edgecolor=CARD_EDGE, linewidth=0.9):
-    patch = matplotlib.patches.FancyBboxPatch(
-        (x, y), w, h,
-        boxstyle="round,pad=0.012,rounding_size=0.02",
-        transform=ax.transAxes,
-        linewidth=linewidth,
-        facecolor=facecolor,
-        edgecolor=edgecolor,
-    )
-    ax.add_patch(patch)
-    return patch
-
-
-def _draw_kpi_card(ax, x, y, w, h, label, value, value_color=TEXT,
-                   edgecolor=CARD_EDGE, fill=CARD_BG):
-    _card_patch(ax, x, y, w, h, facecolor=fill, edgecolor=edgecolor)
-    ax.text(
-        x + 0.03, y + h - 0.035, label,
-        transform=ax.transAxes,
-        fontsize=7.6,
-        color=CARD_MUTED,
-        va="top",
-        ha="left",
-    )
-    ax.text(
-        x + 0.03, y + 0.035, value,
-        transform=ax.transAxes,
-        fontsize=12,
-        color=value_color,
-        va="bottom",
-        ha="left",
-        fontweight="bold",
-    )
-
-
-def _draw_info_card(ax, x, y, w, h, title, rows, dim_alpha=1.0):
-    _card_patch(ax, x, y, w, h)
-    ax.text(
-        x + 0.03, y + h - 0.035, title,
-        transform=ax.transAxes,
-        fontsize=8,
-        color=TEXT,
-        va="top",
-        ha="left",
-        fontweight="bold",
-    )
-    if not rows:
-        return
-
-    top_y = y + h - 0.09
-    bottom_y = y + 0.05
-    if len(rows) == 1:
-        ys = [0.5 * (top_y + bottom_y)]
-    else:
-        step = (top_y - bottom_y) / (len(rows) - 1)
-        ys = [top_y - step * i for i in range(len(rows))]
-
-    for row_y, row in zip(ys, rows):
-        label = row.get("label", "")
-        value = row.get("value", "")
-        value_color = row.get("value_color", TEXT)
-        ax.text(
-            x + 0.03, row_y, label,
-            transform=ax.transAxes,
-            fontsize=7.6,
-            color=CARD_MUTED,
-            va="center",
-            ha="left",
-            alpha=dim_alpha,
-        )
-        ax.text(
-            x + w * 0.53, row_y, value,
-            transform=ax.transAxes,
-            fontsize=8.6,
-            color=value_color,
-            va="center",
-            ha="left",
-            alpha=dim_alpha,
-        )
-
-
-def _draw_footer_card(ax, x, y, w, h, title, lines, dim_alpha=1.0):
-    _card_patch(ax, x, y, w, h, facecolor=CARD_SOFT)
-    ax.text(
-        x + 0.03, y + h - 0.035, title,
-        transform=ax.transAxes,
-        fontsize=8,
-        color=TEXT,
-        va="top",
-        ha="left",
-        fontweight="bold",
-    )
-    if not lines:
-        return
-
-    top_y = y + h - 0.09
-    bottom_y = y + 0.05
-    if len(lines) == 1:
-        ys = [0.5 * (top_y + bottom_y)]
-    else:
-        step = (top_y - bottom_y) / (len(lines) - 1)
-        ys = [top_y - step * i for i in range(len(lines))]
-
-    for row_y, line in zip(ys, lines):
-        ax.text(
-            x + 0.03, row_y, line,
-            transform=ax.transAxes,
-            fontsize=8,
-            color=TEXT,
-            va="center",
-            ha="left",
-            alpha=dim_alpha,
-        )
-
-
 def _derive_dashboard_metrics(snap, sband_profile):
     total = snap["bulk_total"]
     received = snap["bulk_received_count"]
@@ -335,9 +237,9 @@ def _derive_dashboard_metrics(snap, sband_profile):
     beacon = snap["last_beacon"]
     beacon_age_s = None
     freshness = "WAITING"
-    freshness_color = BLUE
+    freshness_color = APPLE_BLUE
     link_health = "NO DATA"
-    link_color = BLUE
+    link_color = APPLE_BLUE
     state_name = "WAITING"
 
     if beacon:
@@ -347,30 +249,35 @@ def _derive_dashboard_metrics(snap, sband_profile):
         beacon_age_s = max(0.0, time.time() - snap["last_beacon_time"])
         if beacon_age_s < 5:
             freshness = "LIVE"
-            freshness_color = GREEN
+            freshness_color = APPLE_GREEN
         elif beacon_age_s < 10:
             freshness = "IDLE"
-            freshness_color = ORANGE
+            freshness_color = APPLE_ORANGE
         else:
             freshness = "STALE"
-            freshness_color = RED
+            freshness_color = APPLE_RED
 
         if freshness == "STALE":
             link_health = "STALE"
-            link_color = RED
+            link_color = APPLE_RED
         elif beacon.uhf_ok and beacon.sband_ok:
             link_health = "HEALTHY"
-            link_color = GREEN
+            link_color = APPLE_GREEN
         elif beacon.uhf_ok or beacon.sband_ok:
             link_health = "DEGRADED"
-            link_color = ORANGE
+            link_color = APPLE_ORANGE
         else:
             link_health = "DOWN"
-            link_color = RED
+            link_color = APPLE_RED
 
     throughput = snap["throughput"]
     throughput_now = throughput[-1] if throughput else None
     throughput_avg = (sum(throughput) / len(throughput)) if throughput else None
+
+    uhf_margin_series = [value - UHF_FLOOR for value in snap["uhf_rssi"]]
+    sband_floor = SBAND_FLOORS.get(sband_profile, -120)
+    sband_margin_series = [value - sband_floor for value in snap["sband_rssi"]]
+
     last_command_rtt_ms = None
     for command in reversed(snap["commands"]):
         if getattr(command, "acked", False) and command.rtt_ms >= 0:
@@ -391,294 +298,336 @@ def _derive_dashboard_metrics(snap, sband_profile):
         "throughput_avg_kbps": throughput_avg,
         "throughput_trend": _throughput_trend(throughput),
         "last_command_rtt_ms": last_command_rtt_ms,
-        "sband_floor": SBAND_FLOORS.get(sband_profile, -120),
-        "uhf_rssi_summary": _format_series_stat(snap["uhf_rssi"], "dBm"),
-        "uhf_snr_summary": _format_series_stat(snap["uhf_snr"], "dB"),
-        "sband_rssi_summary": _format_series_stat(snap["sband_rssi"], "dBm"),
+        "sband_floor": sband_floor,
+        "uhf_margin_now_db": uhf_margin_series[-1] if uhf_margin_series else None,
+        "sband_margin_now_db": sband_margin_series[-1] if sband_margin_series else None,
+        "uhf_margin_series": uhf_margin_series,
+        "sband_margin_series": sband_margin_series,
     }
 
 
 def _plot_rssi(ax, data, color, title, floor):
-    _style_timeseries_axis(ax, title, "dBm")
+    if not data:
+        _draw_empty_state(ax, title, "Waiting for samples")
+        return
 
-    if data:
-        x = list(range(len(data)))
-        ax.plot(x, data, color=color, linewidth=LINE_WIDTH, alpha=0.92)
-        ax.fill_between(x, data, color=color, alpha=FILL_ALPHA)
+    current = data[-1]
+    margin = current - floor
+    _style_timeseries_axis(ax, f"{title} - {margin:.0f} dB margin", "dBm")
 
-        avg = sum(data) / len(data)
-        cur = data[-1]
-        mc = _margin_color(cur, floor)
-        margin = cur - floor
-        _draw_reference_line(ax, avg, color, f"avg {avg:.1f}", style="--")
-        _annotate_metric(
-            ax,
-            f"avg {avg:.1f}",
-            f"now {cur:.1f}  margin {margin:.0f} dB",
-            color,
-            mc,
+    x = list(range(len(data)))
+    avg = sum(data) / len(data)
+    ax.plot(x, data, color=color, linewidth=LINE_WIDTH, alpha=0.95)
+    ax.fill_between(x, data, color=color, alpha=FILL_ALPHA)
+    _draw_reference_line(ax, avg, color, style="--")
+    _draw_reference_line(ax, floor, APPLE_RED, style=":", alpha=FLOOR_LINE_ALPHA)
+    _annotate_metric(
+        ax,
+        f"avg {avg:.1f}",
+        f"now {current:.1f}",
+        color,
+        _margin_color(current, floor),
+    )
+
+    lo, hi = _stable_ylim(data, pad_frac=0.22, min_range=10.0)
+    ax.set_ylim(min(lo, floor - 5), hi)
+
+
+def _plot_snr(ax, data, color, title, empty_message="Waiting for samples"):
+    if not data:
+        _draw_empty_state(ax, title, empty_message)
+        return
+
+    _style_timeseries_axis(ax, title, "dB")
+    x = list(range(len(data)))
+    avg = sum(data) / len(data)
+    ax.plot(x, data, color=color, linewidth=LINE_WIDTH, alpha=0.95)
+    ax.fill_between(x, data, color=color, alpha=FILL_ALPHA)
+    _draw_reference_line(ax, avg, color, style="--")
+    _annotate_metric(
+        ax,
+        f"avg {avg:.1f}",
+        f"now {data[-1]:.1f}",
+        color,
+        color,
+    )
+
+    lo, hi = _stable_ylim(data, pad_frac=0.20, min_range=3.0)
+    ax.set_ylim(lo, hi)
+
+
+def _plot_throughput(ax, data, metrics):
+    if not data:
+        _draw_empty_state(ax, "Throughput", "Waiting for samples")
+        return
+
+    _style_timeseries_axis(
+        ax,
+        f"Throughput - {metrics['throughput_trend']}",
+        "KB/s",
+    )
+    x = list(range(len(data)))
+    avg = metrics["throughput_avg_kbps"]
+    now = metrics["throughput_now_kbps"]
+    ax.plot(x, data, color=APPLE_ORANGE, linewidth=LINE_WIDTH, alpha=0.95)
+    ax.fill_between(x, data, color=APPLE_ORANGE, alpha=FILL_ALPHA)
+    _draw_reference_line(ax, avg, APPLE_ORANGE, style="--")
+    _annotate_metric(
+        ax,
+        f"avg {avg:.1f} KB/s",
+        f"now {now:.1f}",
+        APPLE_ORANGE,
+        APPLE_ORANGE,
+    )
+    ax.set_ylim(0, max(data) * 1.35 or 1)
+
+
+def _plot_packet_loss_gauge(ax, snap, metrics):
+    ax.clear()
+    ax.set_facecolor(SURFACE)
+    ax.set_title("", pad=0)
+    ax.set_xlim(0, 1)
+    ax.set_ylim(0, 1)
+    ax.axis("off")
+    ax.text(
+        0.5, 0.56, "RANGE TEST",
+        transform=ax.transAxes,
+        fontsize=12.5,
+        color=INK,
+        ha="center",
+        va="center",
+        fontfamily="monospace",
+    )
+    ax.text(
+        0.5, 0.43, "DASHBOARD",
+        transform=ax.transAxes,
+        fontsize=12.5,
+        color=APPLE_BLUE,
+        ha="center",
+        va="center",
+        fontfamily="monospace",
+    )
+    ax.add_patch(
+        matplotlib.patches.Rectangle(
+            (0, 0), 1, 1,
+            transform=ax.transAxes,
+            fill=False,
+            edgecolor=SPINE,
+            linewidth=0.7,
         )
-
-        lo, hi = _stable_ylim(data, min_range=10.0)
-        ax.set_ylim(min(lo, floor - 5), hi)
-    else:
-        ax.set_ylim(floor - 10, 0)
-
-    _draw_reference_line(
-        ax, floor, RED, f"floor {floor}",
-        style=":",
-        alpha=FLOOR_LINE_ALPHA,
     )
 
 
-def _plot_snr(ax, data, color, title):
-    _style_timeseries_axis(ax, title, "dB")
+def _plot_progress(ax, snap, metrics):
+    ax.clear()
+    ax.set_facecolor(SURFACE)
+    ax.set_title("Transfer Progress", fontsize=9.2, pad=3)
+    ax.set_xlim(0, 1)
+    ax.set_ylim(0, 1)
+    ax.axis("off")
 
-    if data:
-        x = list(range(len(data)))
-        ax.plot(x, data, color=color, linewidth=LINE_WIDTH, alpha=0.92)
-        ax.fill_between(x, data, color=color, alpha=FILL_ALPHA)
+    pct = metrics["transfer_progress_pct"]
+    total = snap["bulk_total"]
+    received = snap["bulk_received_count"]
 
-        avg = sum(data) / len(data)
-        _draw_reference_line(ax, avg, color, f"avg {avg:.1f}", style="--")
-        _annotate_metric(
-            ax,
-            f"avg {avg:.1f}",
-            f"now {data[-1]:.1f}",
-            color,
-            color,
+    if pct is not None:
+        headline = f"{pct:0.1f}%"
+        footer = f"{received} / {total} PKTS"
+        active_segments = int(round((pct / 100.0) * 28))
+    else:
+        headline = "N/A"
+        footer = "STANDBY"
+        active_segments = 0
+
+    start_x = 0.045
+    total_width = 0.91
+    gap = 0.005
+    segments = 28
+    seg_w = (total_width - gap * (segments - 1)) / segments
+    seg_y = 0.405
+    seg_h = 0.17
+
+    ax.add_patch(
+        matplotlib.patches.Rectangle(
+            (start_x - 0.012, seg_y - 0.025),
+            total_width + 0.024,
+            seg_h + 0.05,
+            transform=ax.transAxes,
+            fill=False,
+            edgecolor=SPINE,
+            linewidth=0.7,
+        )
+    )
+
+    for index in range(segments):
+        x = start_x + index * (seg_w + gap)
+        color = APPLE_TEAL if index < active_segments else TRACK
+        alpha = 0.95 if index < active_segments else 1.0
+        ax.add_patch(
+            matplotlib.patches.Rectangle(
+                (x, seg_y),
+                seg_w,
+                seg_h,
+                transform=ax.transAxes,
+                linewidth=0,
+                facecolor=color,
+                alpha=alpha,
+            )
         )
 
-        lo, hi = _stable_ylim(data, min_range=3.0)
-        ax.set_ylim(lo, hi)
-    else:
-        ax.set_ylim(-5, 15)
+    ax.text(
+        0.5, 0.66, headline,
+        transform=ax.transAxes,
+        fontsize=11.2,
+        color=APPLE_TEAL,
+        ha="center",
+        va="center",
+        fontfamily="monospace",
+    )
+    ax.text(
+        0.5, 0.18, footer,
+        transform=ax.transAxes,
+        fontsize=6.2,
+        color=MUTED,
+        ha="center",
+        va="center",
+        fontfamily="monospace",
+    )
+    ax.add_patch(
+        matplotlib.patches.Rectangle(
+            (0, 0), 1, 1,
+            transform=ax.transAxes,
+            fill=False,
+            edgecolor=SPINE,
+            linewidth=0.7,
+        )
+    )
+
+
+def _plot_link_margin(ax, metrics):
+    uhf = metrics["uhf_margin_series"]
+    sband = metrics["sband_margin_series"]
+    if not uhf and not sband:
+        _draw_empty_state(ax, "Link Margin", "No margin data")
+        return
+
+    _style_timeseries_axis(ax, "Link Margin", "dB")
+    combined = []
+    if uhf:
+        x = list(range(len(uhf)))
+        ax.plot(x, uhf, color=APPLE_GREEN, linewidth=LINE_WIDTH, label="UHF")
+        combined.extend(uhf)
+    if sband:
+        x = list(range(len(sband)))
+        ax.plot(x, sband, color=APPLE_VIOLET, linewidth=LINE_WIDTH, label="S-Band")
+        combined.extend(sband)
+    if uhf and sband:
+        ax.legend(loc="upper right")
+
+    lo, hi = _stable_ylim(combined, pad_frac=0.20, min_range=8.0)
+    ax.set_ylim(lo, hi)
+
+
+def _plot_packet_stats(ax, snap, metrics):
+    ax.clear()
+    ax.set_facecolor(SURFACE)
+    ax.set_title("Packet Stats", fontsize=9.2, pad=3)
+    ax.grid(True, axis="y", alpha=0.34, linewidth=0.28, linestyle="--")
+    ax.grid(False, axis="x")
+    ax.set_ylabel("Packets")
+    ax.yaxis.set_major_locator(matplotlib.ticker.MaxNLocator(5))
+    ax.tick_params(length=2.5, width=0.6, colors=INK, pad=2)
+    for spine in ax.spines.values():
+        spine.set_color(SPINE)
+        spine.set_linewidth(0.7)
+
+    total = snap["bulk_total"]
+    received = snap["bulk_received_count"]
+    missing = metrics["missing_count"]
+
+    bars = ax.bar(
+        ["Received", "Missing"],
+        [received, missing],
+        color=[APPLE_GREEN, APPLE_RED],
+        alpha=0.82,
+        edgecolor=SPINE,
+        linewidth=0.8,
+        width=0.48,
+    )
+    for bar, value in zip(bars, [received, missing]):
+        if value > 0:
+            ax.text(
+                bar.get_x() + bar.get_width() / 2,
+                bar.get_height() + max(total * 0.015, 0.45),
+                str(value),
+                ha="center",
+                va="bottom",
+                color=INK,
+                fontsize=6.8,
+                fontfamily="monospace",
+            )
+
+    subtitle = "counts" if total > 0 else "waiting"
+    ax.text(
+        0.5, 0.97, subtitle,
+        transform=ax.transAxes,
+        fontsize=5.8,
+        color=MUTED,
+        ha="center",
+        va="top",
+        fontfamily="monospace",
+    )
+    ax.set_ylim(0, max(total, received, 4) * 1.18)
 
 
 def init_dashboard():
-    """Create the main 2x3 dashboard figure."""
+    """Create the main 3x3 dashboard figure."""
     apply_dark_theme()
 
-    fig, axes = plt.subplots(2, 3, figsize=(16, 9),
-                             facecolor=BG, constrained_layout=True)
+    fig = plt.figure(figsize=(15.2, 8.4), facecolor=SURFACE, layout="constrained")
+    engine = fig.get_layout_engine()
+    if engine is not None and hasattr(engine, "set"):
+        engine.set(w_pad=1.2 / 72, h_pad=1.2 / 72, wspace=0.012, hspace=0.02)
+    axes = fig.subplot_mosaic([
+        ["uhf_rssi", "sb_rssi", "pkt_loss"],
+        ["uhf_snr", "sb_snr", "progress"],
+        ["throughput", "link_margin", "pkt_stats"],
+    ])
     _safe_set_window_title(fig, "Balloon Link Budget Dashboard")
 
-    ax_uhf_rssi  = axes[0, 0]
-    ax_sb_rssi   = axes[0, 1]
-    ax_status    = axes[0, 2]
-    ax_uhf_snr   = axes[1, 0]
-    ax_throughput = axes[1, 1]
-    ax_pkt_stats = axes[1, 2]
-
-    ax_status.set_facecolor(FACE)
-    ax_status.axis("off")
+    for ax in axes.values():
+        ax.set_facecolor(SURFACE)
 
     fig.canvas.draw()
     fig.canvas.flush_events()
-
-    return fig, {
-        "uhf_rssi": ax_uhf_rssi,
-        "sb_rssi": ax_sb_rssi,
-        "status": ax_status,
-        "uhf_snr": ax_uhf_snr,
-        "throughput": ax_throughput,
-        "pkt_stats": ax_pkt_stats,
-    }
+    return fig, axes
 
 
 def update_dashboard(fig, axes, snap, sband_profile=1):
     """Refresh all dashboard plots from a state snapshot."""
     metrics = _derive_dashboard_metrics(snap, sband_profile)
 
-    _plot_rssi(axes["uhf_rssi"], snap["uhf_rssi"], GREEN,
-               "UHF RSSI", UHF_FLOOR)
-
-    _plot_rssi(axes["sb_rssi"], snap["sband_rssi"], PURPLE,
-               "S-Band RSSI", metrics["sband_floor"])
-
-    _plot_snr(axes["uhf_snr"], snap["uhf_snr"], YELLOW, "UHF SNR")
-
-    # Throughput
-    ax_t = axes["throughput"]
-    _style_timeseries_axis(ax_t, "Throughput (KB/s)", "KB/s")
-    tp = snap["throughput"]
-    if tp:
-        x = list(range(len(tp)))
-        avg = metrics["throughput_avg_kbps"]
-        now = metrics["throughput_now_kbps"]
-        ax_t.plot(x, tp, color=ORANGE, linewidth=LINE_WIDTH, alpha=0.92)
-        ax_t.fill_between(x, tp, color=ORANGE, alpha=FILL_ALPHA)
-        _draw_reference_line(ax_t, avg, ORANGE, f"avg {avg:.1f}", style="--")
-        _annotate_metric(
-            ax_t,
-            f"avg {avg:.1f} KB/s",
-            f"now {now:.1f} • {metrics['throughput_trend']}",
-            ORANGE,
-            ORANGE,
-        )
-        ax_t.set_ylim(0, max(tp) * 1.25 or 1)
-    else:
-        ax_t.set_ylim(0, 1)
-        _annotate_metric(ax_t, "avg N/A", "now N/A", ORANGE, ORANGE)
-
-    # Status panel
-    ax_s = axes["status"]
-    ax_s.clear()
-    ax_s.set_facecolor(FACE)
-    ax_s.axis("off")
-    ax_s.set_title("Status", fontsize=12, pad=6)
-
-    bcn = snap["last_beacon"]
-    stale_alpha = 0.68 if metrics["freshness"] == "STALE" else 1.0
-    age_text = (
-        f"{metrics['beacon_age_s']:.1f}s ago"
-        if metrics["beacon_age_s"] is not None else "Waiting"
+    _plot_rssi(axes["uhf_rssi"], snap["uhf_rssi"], APPLE_GREEN, "UHF RSSI", UHF_FLOOR)
+    _plot_rssi(
+        axes["sb_rssi"],
+        snap["sband_rssi"],
+        APPLE_VIOLET,
+        "S-Band RSSI",
+        metrics["sband_floor"],
     )
-    if bcn:
-        progress = (
-            f"{metrics['transfer_progress_pct']:.0f}%"
-            if metrics["transfer_progress_pct"] is not None else "N/A"
-        )
-        loss = (
-            f"{metrics['packet_loss_pct']:.1f}%"
-            if metrics["packet_loss_pct"] is not None else "N/A"
-        )
-        rate_now = (
-            f"{metrics['throughput_now_kbps']:.1f} KB/s"
-            if metrics["throughput_now_kbps"] is not None else "N/A"
-        )
-        link_value = (
-            f"{'OK' if bcn.uhf_ok else 'NO'} / {'OK' if bcn.sband_ok else 'NO'}"
-        )
-        status_fill = "#F8FBF8" if metrics["freshness"] != "STALE" else "#FFF8F8"
-        status_edge = GREEN if metrics["link_health"] == "HEALTHY" else CARD_EDGE
-        freshness_edge = metrics["freshness_color"]
-
-        _draw_kpi_card(
-            ax_s, 0.04, 0.76, 0.28, 0.12,
-            "State", metrics["state_name"],
-            value_color=TEXT,
-            edgecolor=CARD_EDGE,
-            fill=CARD_BG,
-        )
-        _draw_kpi_card(
-            ax_s, 0.36, 0.76, 0.28, 0.12,
-            "Link", metrics["link_health"],
-            value_color=metrics["link_color"],
-            edgecolor=status_edge,
-            fill=status_fill,
-        )
-        _draw_kpi_card(
-            ax_s, 0.68, 0.76, 0.28, 0.12,
-            "Freshness", metrics["freshness"],
-            value_color=metrics["freshness_color"],
-            edgecolor=freshness_edge,
-            fill="#FFF8F8" if metrics["freshness"] == "STALE" else CARD_BG,
-        )
-
-        radio_rows = [
-            {"label": "Profile / TX", "value": f"P{bcn.sband_profile}  •  {bcn.tx_power_dbm} dBm"},
-            {"label": "UHF / S-Band", "value": link_value,
-             "value_color": metrics["link_color"] if bcn.uhf_ok and bcn.sband_ok else ORANGE},
-            {"label": "Image", "value": "Loaded" if bcn.image_loaded else "Not loaded",
-             "value_color": GREEN if bcn.image_loaded else ORANGE},
-            {"label": "Last beacon", "value": age_text, "value_color": metrics["freshness_color"]},
-        ]
-        transfer_rows = [
-            {"label": "Packets", "value": (
-                f"{snap['bulk_received_count']} / {snap['bulk_total']}"
-                if snap["bulk_total"] > 0 else "0 / -"
-            )},
-            {"label": "Progress", "value": progress},
-            {"label": "Loss", "value": loss,
-             "value_color": RED if metrics["packet_loss_pct"] else TEXT},
-            {"label": "Rate now", "value": rate_now},
-        ]
-        _draw_info_card(ax_s, 0.04, 0.43, 0.44, 0.27, "Radio", radio_rows, stale_alpha)
-        _draw_info_card(ax_s, 0.52, 0.43, 0.44, 0.27, "Transfer", transfer_rows, stale_alpha)
-
-        footer_lines = [
-            f"{snap['beacon_count']} beacons   {snap['bulk_count']} bulk   {snap['ack_count']} ACKs",
-            (
-                f"UHF {snap['uhf_rssi'][-1]:.1f} dBm  •  {snap['uhf_snr'][-1]:.1f} dB"
-                if snap["uhf_rssi"] and snap["uhf_snr"] else "UHF link metrics unavailable"
-            ),
-        ]
-        if snap["sband_rssi"]:
-            footer_lines.append(f"S-Band {snap['sband_rssi'][-1]:.1f} dBm")
-        if metrics["last_command_rtt_ms"] is not None:
-            footer_lines.append(f"Last command RTT {metrics['last_command_rtt_ms']:.0f} ms")
-        else:
-            footer_lines.append(f"Device uptime {bcn.uptime_ms / 1000:.0f}s")
-        _draw_footer_card(ax_s, 0.04, 0.12, 0.92, 0.24, "Recent", footer_lines, stale_alpha)
-    else:
-        _draw_kpi_card(ax_s, 0.04, 0.76, 0.28, 0.12, "State", "WAITING", BLUE)
-        _draw_kpi_card(ax_s, 0.36, 0.76, 0.28, 0.12, "Link", "NO DATA", CARD_MUTED)
-        _draw_kpi_card(ax_s, 0.68, 0.76, 0.28, 0.12, "Freshness", "WAITING", BLUE)
-        _draw_info_card(
-            ax_s, 0.04, 0.43, 0.44, 0.27, "Radio",
-            [
-                {"label": "Profile / TX", "value": "Waiting"},
-                {"label": "UHF / S-Band", "value": "No data"},
-                {"label": "Image", "value": "Unknown"},
-                {"label": "Last beacon", "value": "Waiting", "value_color": BLUE},
-            ],
-        )
-        _draw_info_card(
-            ax_s, 0.52, 0.43, 0.44, 0.27, "Transfer",
-            [
-                {"label": "Packets", "value": "0 / -"},
-                {"label": "Progress", "value": "N/A"},
-                {"label": "Loss", "value": "N/A"},
-                {"label": "Rate now", "value": "N/A"},
-            ],
-        )
-        _draw_footer_card(
-            ax_s, 0.04, 0.12, 0.92, 0.24, "Recent",
-            [
-                "Waiting for first beacon",
-                "Packet loss is shown during active transfers",
-                "Charts keep their last visible samples",
-            ],
-        )
-
-    # Packet stats bar chart
-    ax_p = axes["pkt_stats"]
-    ax_p.clear()
-    ax_p.set_facecolor(FACE)
-    ax_p.set_title("Packet Stats", fontsize=13)
-    ax_p.grid(True, axis="y", alpha=0.45, linewidth=0.4)
-    ax_p.grid(False, axis="x")
-    ax_p.set_ylabel("Packets")
-    for spine in ax_p.spines.values():
-        spine.set_color(SPINE)
-        spine.set_linewidth(0.8)
-
-    total = snap["bulk_total"]
-    rxd = snap["bulk_received_count"]
-    missing = metrics["missing_count"]
-
-    cats = ["Received", "Missing"]
-    vals = [rxd, missing]
-    colors = [GREEN, RED]
-    bars = ax_p.bar(cats, vals, color=colors, alpha=0.85,
-                    edgecolor=SPINE, linewidth=0.8, width=0.55)
-    for b, v in zip(bars, vals):
-        if v > 0:
-            ax_p.text(b.get_x() + b.get_width() / 2,
-                      b.get_height() + max(total * 0.015, 0.6),
-                      str(v), ha="center", va="bottom",
-                      color=TEXT, fontsize=10, fontweight="bold")
-    if total > 0 and metrics["packet_loss_pct"] is not None:
-        summary = (
-            f"Loss {metrics['packet_loss_pct']:.1f}% \u2022 "
-            f"Progress {metrics['transfer_progress_pct']:.0f}%"
-        )
-    else:
-        summary = "Waiting for transfer"
-    ax_p.text(0.5, 0.97, summary, transform=ax_p.transAxes,
-              fontsize=8.5, color=TEXT, ha="center", va="top", alpha=0.8)
-    ax_p.set_ylim(0, max(total, rxd, 4) * 1.18)
+    _plot_packet_loss_gauge(axes["pkt_loss"], snap, metrics)
+    _plot_snr(axes["uhf_snr"], snap["uhf_snr"], APPLE_YELLOW, "UHF SNR")
+    _plot_snr(
+        axes["sb_snr"],
+        snap["sband_snr"],
+        APPLE_BLUE,
+        "S-Band SNR",
+        empty_message="No S-Band bulk yet",
+    )
+    _plot_progress(axes["progress"], snap, metrics)
+    _plot_throughput(axes["throughput"], snap["throughput"], metrics)
+    _plot_link_margin(axes["link_margin"], metrics)
+    _plot_packet_stats(axes["pkt_stats"], snap, metrics)
 
     fig.canvas.draw_idle()
     fig.canvas.flush_events()
@@ -687,9 +636,21 @@ def update_dashboard(fig, axes, snap, sband_profile=1):
 def init_image_preview():
     """Create a separate image preview figure."""
     fig, ax = plt.subplots(1, 1, figsize=(6, 6),
-                           facecolor=BG, constrained_layout=True)
+                           facecolor=SURFACE, constrained_layout=True)
     _safe_set_window_title(fig, "Image Preview")
-    ax.set_facecolor(BG)
+    ax.set_facecolor(SURFACE)
+    ax.axis("off")
+    fig.canvas.draw()
+    fig.canvas.flush_events()
+    return fig, ax
+
+
+def init_bulk_preview():
+    """Create a separate text preview figure for bulk streaming."""
+    fig, ax = plt.subplots(1, 1, figsize=(8, 6),
+                           facecolor=SURFACE, constrained_layout=True)
+    _safe_set_window_title(fig, "Bulk Text Preview")
+    ax.set_facecolor(SURFACE)
     ax.axis("off")
     fig.canvas.draw()
     fig.canvas.flush_events()
@@ -700,6 +661,10 @@ def update_image_preview(fig, ax, bulk_data: dict, total_pkts: int):
     """Reassemble and render image from received bulk packets."""
     if total_pkts <= 0:
         return
+
+    received_count = len(bulk_data)
+    pct = received_count / total_pkts * 100 if total_pkts > 0 else 0
+    missing_count = max(0, total_pkts - received_count)
 
     parts = []
     for i in range(total_pkts):
@@ -712,15 +677,63 @@ def update_image_preview(fig, ax, bulk_data: dict, total_pkts: int):
     try:
         img = Image.open(io.BytesIO(jpeg))
         ax.clear()
+        ax.set_facecolor(SURFACE)
         ax.imshow(img)
         ax.axis("off")
-        pct = len(bulk_data) / total_pkts * 100 if total_pkts > 0 else 0
-        ax.set_title(f"Image \u2014 {len(bulk_data)}/{total_pkts} pkts ({pct:.0f}%)",
-                     fontsize=11, fontweight="bold")
+        ax.set_title(f"Image \u2014 {received_count}/{total_pkts} pkts ({pct:.0f}%)",
+                     fontsize=10.5, color=INK)
         fig.canvas.draw_idle()
         fig.canvas.flush_events()
     except Exception:
-        pass
+        ax.clear()
+        ax.set_facecolor(SURFACE)
+        ax.axis("off")
+        ax.set_title(f"Image \u2014 {received_count}/{total_pkts} pkts ({pct:.0f}%)",
+                     fontsize=10.5, color=INK)
+        if missing_count > 0:
+            message = (
+                "Image not decodable yet\n"
+                f"Missing {missing_count} packet"
+                f"{'' if missing_count == 1 else 's'}"
+            )
+        else:
+            message = "Image decode pending"
+        ax.text(
+            0.5, 0.5, message,
+            transform=ax.transAxes,
+            fontsize=10,
+            color=MUTED,
+            ha="center",
+            va="center",
+        )
+        fig.canvas.draw_idle()
+        fig.canvas.flush_events()
+
+
+def update_bulk_preview(fig, ax, preview_text: str, packet_count: int, band_name: str):
+    """Render a rolling monospaced text view for continuous bulk streaming."""
+    ax.clear()
+    ax.set_facecolor(SURFACE)
+    ax.axis("off")
+
+    title = f"Bulk Text - {packet_count} pkts on {band_name}"
+    ax.set_title(title, fontsize=11, color=INK)
+
+    if preview_text:
+        recent = preview_text[-2200:]
+        wrapped = textwrap.fill(recent, width=68, break_long_words=False,
+                                replace_whitespace=False)
+        ax.text(0.02, 0.98, wrapped, transform=ax.transAxes,
+                fontsize=9, fontfamily="monospace", color=INK,
+                va="top", ha="left")
+    else:
+        ax.text(0.5, 0.5, "Waiting for bulk text...",
+                transform=ax.transAxes, fontsize=13,
+                color=APPLE_BLUE, va="center", ha="center",
+                fontfamily="monospace")
+
+    fig.canvas.draw_idle()
+    fig.canvas.flush_events()
 
 
 def save_image(bulk_data: dict, total_pkts: int, output_dir: str) -> str:

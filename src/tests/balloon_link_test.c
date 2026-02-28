@@ -30,14 +30,18 @@
 #define UHF_RX_TIMEOUT_MS   3000u
 #define SBAND_RX_TIMEOUT_MS 5000u
 #define BULK_INTER_PKT_MS   15u
-#define ARQ_RX_TIMEOUT_MS   8000u
+#define ARQ_RX_TIMEOUT_MS   1000u
 #define ARQ_MAX_ROUNDS      3u
 #define SWEEP_PKTS_PER_LEVEL 5u
 #define SWEEP_STEP_DBM      2
 #define CMD_BUF_SIZE        600u
 
-#define DEFAULT_SBAND_PROFILE   1u
-#define DEFAULT_TX_POWER_DBM    13
+#define DEFAULT_SBAND_PROFILE       1u
+#define DEFAULT_SBAND_TX_POWER_DBM  13
+#define DEFAULT_UHF_TX_POWER_DBM    20
+
+#define UHF_BULK_DATA_BYTES         64u
+#define UHF_BULK_CTRL_LISTEN_MS     120u
 
 #define CMD_RESULT_INVALID_PARAM    1u
 #define CMD_RESULT_UNAVAILABLE      2u
@@ -207,7 +211,7 @@ static const uint32_t IMAGE_DATA_LEN = 0;
 static balloon_state_t g_state = BALLOON_STATE_BEACON;
 static uint8_t g_seq = 0u;
 static uint8_t g_sband_profile = DEFAULT_SBAND_PROFILE;
-static int8_t  g_tx_power_dbm = DEFAULT_TX_POWER_DBM;
+static int8_t  g_tx_power_dbm = DEFAULT_UHF_TX_POWER_DBM;
 static uint32_t g_tx_count = 0u;
 static uint32_t g_rx_count = 0u;
 static int16_t g_last_cmd_rssi = 0;
@@ -546,29 +550,37 @@ static void flight_run_bulk(void) {
         pkt.total_pkts = 0u; /* continuous — 0 means streaming */
         pkt.band = g_bulk_band;
 
+        uint8_t data_bytes = (g_bulk_band == BALLOON_BAND_UHF) ?
+                             UHF_BULK_DATA_BYTES : BALLOON_BULK_DATA_MAX;
+
         /* Fill with text data, wrapping around the buffer */
-        for (uint8_t i = 0; i < BALLOON_BULK_DATA_MAX; i++) {
+        for (uint8_t i = 0; i < data_bytes; i++) {
             pkt.data[i] = (uint8_t)BALLOON_BULK_TEXT[g_bulk_offset % BALLOON_BULK_TEXT_LEN];
             g_bulk_offset++;
         }
-        pkt.data_len = BALLOON_BULK_DATA_MAX;
+        pkt.data_len = data_bytes;
 
-        uint8_t tx_len = BALLOON_BULK_HDR_SIZE + BALLOON_BULK_DATA_MAX;
+        uint8_t tx_len = (uint8_t)(BALLOON_BULK_HDR_SIZE + data_bytes);
         bool ok;
         if (g_bulk_band == BALLOON_BAND_SBAND)
             ok = sband_send((const uint8_t *)&pkt, tx_len);
         else
-            ok = uhf_send((const uint8_t *)&pkt, (uint8_t)(BALLOON_BULK_HDR_SIZE + 200u));
+            ok = uhf_send((const uint8_t *)&pkt, tx_len);
 
         if (ok) g_tx_count++;
 
         if ((g_bulk_pkt_num & 0x07) == 0) led_blue();
         else if ((g_bulk_pkt_num & 0x07) == 4) led_off();
 
+        if (g_bulk_band == BALLOON_BAND_UHF) {
+            if (flight_check_uhf_busy_cmd(UHF_BULK_CTRL_LISTEN_MS)) return;
+        }
+
         sleep_ms(BULK_INTER_PKT_MS);
 
-        /* Check for UHF control every 4 packets */
-        if ((g_bulk_pkt_num & 0x03) == 0) {
+        /* Check for UHF control periodically during S-Band bulk */
+        if (g_bulk_band == BALLOON_BAND_SBAND &&
+            (g_bulk_pkt_num & 0x03) == 0) {
             if (flight_check_uhf_busy_cmd(200u)) return;
         }
     }
@@ -585,8 +597,8 @@ static void flight_run_power_sweep(void) {
             sx1280f27_set_tx_power_dbm(g_sweep_cur_dbm);
         } else {
             rfm98pw_set_tx_power_dbm(g_sweep_cur_dbm);
+            g_tx_power_dbm = g_sweep_cur_dbm;
         }
-        g_tx_power_dbm = g_sweep_cur_dbm;
 
         for (uint8_t i = 0; i < SWEEP_PKTS_PER_LEVEL; i++) {
             /* Beacon on UHF (also the test pkt for UHF sweep) */
@@ -614,11 +626,13 @@ static void flight_run_power_sweep(void) {
         g_sweep_cur_dbm += SWEEP_STEP_DBM;
         if (g_sweep_cur_dbm > g_sweep_max_dbm) {
             /* Reset to default and return to beacon */
-            if (g_sweep_band == BALLOON_BAND_SBAND)
-                sx1280f27_set_tx_power_dbm(DEFAULT_TX_POWER_DBM);
-            else
-                rfm98pw_set_tx_power_dbm(DEFAULT_TX_POWER_DBM);
-            g_tx_power_dbm = DEFAULT_TX_POWER_DBM;
+            if (g_sweep_band == BALLOON_BAND_SBAND) {
+                sx1280f27_set_tx_power_dbm(DEFAULT_SBAND_TX_POWER_DBM);
+                g_tx_power_dbm = DEFAULT_UHF_TX_POWER_DBM;
+            } else {
+                rfm98pw_set_tx_power_dbm(DEFAULT_UHF_TX_POWER_DBM);
+                g_tx_power_dbm = DEFAULT_UHF_TX_POWER_DBM;
+            }
             g_state = BALLOON_STATE_BEACON;
         }
 
@@ -793,10 +807,12 @@ static void ground_send_cmd(uint8_t cmd_id, uint8_t param, uint8_t seq) {
     cmd.param = param;
 
     if (uhf_send((const uint8_t *)&cmd, sizeof(cmd))) {
+        rfm98pw_start_rx(UHF_RX_TIMEOUT_MS);
         printf("CMD_SENT,cmd=%u,param=%u,seq=%u\n",
                (unsigned)cmd_id, (unsigned)param,
                (unsigned)cmd.hdr.seq);
     } else {
+        rfm98pw_start_rx(UHF_RX_TIMEOUT_MS);
         printf("CMD_FAIL,cmd=%u,seq=%u,reason=tx_error\n",
                (unsigned)cmd_id, (unsigned)cmd.hdr.seq);
     }
@@ -956,7 +972,8 @@ int main(void) {
     }
 
     sx1280f27_set_profile(DEFAULT_SBAND_PROFILE);
-    sx1280f27_set_tx_power_dbm(DEFAULT_TX_POWER_DBM);
+    sx1280f27_set_tx_power_dbm(DEFAULT_SBAND_TX_POWER_DBM);
+    rfm98pw_set_tx_power_dbm(DEFAULT_UHF_TX_POWER_DBM);
 
     led_green();
     sleep_ms(300);

@@ -39,7 +39,8 @@ from _state import GroundState
 from _logger import BalloonLogger
 from _dashboard import (
     apply_dark_theme, init_dashboard, update_dashboard,
-    init_image_preview, update_image_preview, save_image,
+    init_image_preview, update_image_preview,
+    init_bulk_preview, update_bulk_preview, save_image,
 )
 from _serial_bridge import APPLE, pick_serial_port, RF_PROFILES
 
@@ -101,15 +102,18 @@ class SerialReader(threading.Thread):
                     self.logger.log_beacon(record)
 
                 elif tag == "CMD_ACK" and isinstance(record, CmdAck):
-                    self.state.record_ack(record)
+                    matched = self.state.record_ack(record)
                     self.logger.log_ack(record)
                     cmd_name = CMD_NAMES.get(record.cmd, f"?{record.cmd}")
                     result_str = describe_cmd_result(record.result)
                     color = APPLE[0] if record.result == 0 else (
                         APPLE[1] if record.result == 3 else APPLE[3]
                     )
+                    seq_text = f"seq={record.seq}"
+                    if matched and matched.seq != record.seq:
+                        seq_text = f"host_seq={matched.seq} wire_seq={record.seq}"
                     console.print(
-                        f"  [{color}]ACK[/] cmd={cmd_name} seq={record.seq} "
+                        f"  [{color}]ACK[/] cmd={cmd_name} {seq_text} "
                         f"result={result_str} "
                         f"cmd_rssi={record.cmd_rssi_x100 / 100:.1f} "
                         f"cmd_snr={record.cmd_snr_x100 / 100:.1f}"
@@ -120,33 +124,50 @@ class SerialReader(threading.Thread):
                     self.logger.log_bulk(record)
                     # Print milestone for image transfers (total > 0)
                     if record.total_pkts > 0:
+                        snap = self.state.get_snapshot()
+                        unique_count = snap["bulk_received_count"]
                         if record.pkt_num % 10 == 0 or \
                                 record.pkt_num == record.total_pkts - 1:
-                            pct = (record.pkt_num + 1) * 100 // record.total_pkts
+                            pct = unique_count * 100 // record.total_pkts
                             console.print(
                                 f"  [{APPLE[4]}]IMG[/] pkt "
-                                f"{record.pkt_num + 1}/{record.total_pkts} "
+                                f"{unique_count}/{record.total_pkts} "
                                 f"({pct}%)"
                             )
                         if record.pkt_num == record.total_pkts - 1:
-                            console.print(
-                                f"  [{APPLE[1]}]Image payload complete[/] "
-                                f"balloon will listen for NACKs (up to 8s)"
-                            )
+                            if unique_count == record.total_pkts:
+                                console.print(
+                                    f"  [{APPLE[1]}]Image payload complete[/] "
+                                    f"balloon will accept NACKs briefly"
+                                )
+                            else:
+                                missing_count = record.total_pkts - unique_count
+                                console.print(
+                                    f"  [{APPLE[3]}]Final image packet arrived[/] "
+                                    f"but {missing_count} packet"
+                                    f"{'' if missing_count == 1 else 's'} "
+                                    f"still missing"
+                                )
 
                 elif tag == "CMD_SENT" and isinstance(record, CmdSent):
-                    self.state.record_cmd_sent(record)
+                    matched = self.state.record_cmd_sent(record)
                     cmd_name = CMD_NAMES.get(record.cmd, f"?{record.cmd}")
+                    seq_text = f"seq={record.seq}"
+                    if matched and matched.seq != record.seq:
+                        seq_text = f"host_seq={matched.seq} wire_seq={record.seq}"
                     console.print(
-                        f"  [{APPLE[2]}]RADIO_TX[/] cmd={cmd_name} seq={record.seq}"
+                        f"  [{APPLE[2]}]RADIO_TX[/] cmd={cmd_name} {seq_text}"
                     )
 
                 elif tag == "CMD_FAIL" and isinstance(record, CmdFail):
-                    self.state.record_cmd_fail(record)
+                    matched = self.state.record_cmd_fail(record)
                     cmd_name = CMD_NAMES.get(record.cmd, f"?{record.cmd}")
+                    seq_text = f"seq={record.seq}"
+                    if matched and matched.seq != record.seq:
+                        seq_text = f"host_seq={matched.seq} wire_seq={record.seq}"
                     console.print(
                         f"  [{APPLE[3]}]CMD_FAIL[/] cmd={cmd_name} "
-                        f"seq={record.seq} reason={record.reason}"
+                        f"{seq_text} reason={record.reason}"
                     )
 
                 elif tag == "NACK_SENT":
@@ -199,7 +220,7 @@ def _wait_input(input_q: queue.Queue) -> str:
 
 def _command_policy(cmd_name: str) -> tuple[int, float]:
     if cmd_name == "STOP":
-        return 4, 1.2
+        return 6, 0.35
     if cmd_name == "PING":
         return 2, 2.0
     if cmd_name == "SET_SBAND_PROFILE":
@@ -305,20 +326,7 @@ def main():
 
     console.print(f"  [{APPLE[0]}]Connected to {port}[/]")
 
-    # Wait for ready line
-    console.print(f"  [{APPLE[1]}]Waiting for ground firmware...[/]")
-    saw_ready_line = False
-    deadline = time.time() + 5
-    while time.time() < deadline:
-        raw = ser.readline()
-        if raw:
-            line = raw.decode("utf-8", errors="replace").strip()
-            if "ready" in line.lower():
-                saw_ready_line = True
-                console.print(f"  [{APPLE[0]}]Ground firmware ready: {line}[/]")
-                break
-    else:
-        console.print(f"  [{APPLE[1]}]No ready line — probing link instead[/]")
+    console.print(f"  [{APPLE[1]}]Probing ground firmware...[/]")
 
     # Init state, logger, reader
     state = GroundState()
@@ -328,12 +336,11 @@ def main():
     reader = SerialReader(ser, state, logger)
     reader.start()
 
-    if not saw_ready_line:
-        rec = send_command(ser, state, logger, "PING")
-        if rec and rec.acked and rec.result == 0:
-            console.print(f"  [{APPLE[0]}]Link probe succeeded[/] ground firmware is responding")
-        else:
-            console.print(f"  [{APPLE[3]}]Link probe failed[/] no PING ACK yet")
+    rec = send_command(ser, state, logger, "PING")
+    if rec and rec.acked and rec.result == 0:
+        console.print(f"  [{APPLE[0]}]Link probe succeeded[/] ground firmware is responding")
+    else:
+        console.print(f"  [{APPLE[3]}]Link probe failed[/] no PING ACK yet")
 
     # Start non-blocking input thread
     input_q = queue.Queue()
@@ -345,8 +352,11 @@ def main():
     dash_axes = None
     img_fig = None
     img_ax = None
+    bulk_fig = None
+    bulk_ax = None
     sband_profile = 1
     auto_stop_time = None
+    image_transfer_active = False
     last_dash_update = 0.0
 
     print_menu()
@@ -362,9 +372,12 @@ def main():
             if img_fig is not None and not plt.fignum_exists(img_fig.number):
                 img_fig = None
                 img_ax = None
+            if bulk_fig is not None and not plt.fignum_exists(bulk_fig.number):
+                bulk_fig = None
+                bulk_ax = None
 
             # Refresh dashboard / preview (~15 Hz when a figure is open)
-            if (dash_fig is not None or img_fig is not None) and now - last_dash_update > 0.066:
+            if (dash_fig is not None or img_fig is not None or bulk_fig is not None) and now - last_dash_update > 0.066:
                 try:
                     snap = state.get_snapshot()
                     active_profile = (
@@ -377,6 +390,14 @@ def main():
                         update_image_preview(img_fig, img_ax,
                                              snap["bulk_data"],
                                              snap["bulk_total"])
+                    if bulk_fig is not None and snap["bulk_text_preview"]:
+                        band_name = "UHF" if snap["bulk_band"] == 1 else (
+                            "S-Band" if snap["bulk_band"] == 2 else "Unknown"
+                        )
+                        update_bulk_preview(bulk_fig, bulk_ax,
+                                            snap["bulk_text_preview"],
+                                            snap["bulk_count"],
+                                            band_name)
                     last_dash_update = now
                 except Exception:
                     pass
@@ -391,6 +412,7 @@ def main():
             if auto_stop_time and time.time() >= auto_stop_time:
                 rec = send_command(ser, state, logger, "STOP")
                 auto_stop_time = None
+                image_transfer_active = False
                 snap = state.get_snapshot()
                 if rec and rec.acked and rec.result == 0:
                     console.print(
@@ -404,6 +426,16 @@ def main():
                     )
                 print_menu()
                 _prompt()
+
+            if image_transfer_active:
+                snap = state.get_snapshot()
+                if (snap["bulk_total"] > 0 and
+                        snap["bulk_received_count"] == snap["bulk_total"]):
+                    image_transfer_active = False
+                    console.print(
+                        f"  [{APPLE[0]}]Image transfer complete[/] "
+                        f"balloon should return to beacon shortly"
+                    )
 
             # Non-blocking input check
             try:
@@ -463,6 +495,7 @@ def main():
                 state.clear_bulk()
                 rec = send_command(ser, state, logger, "START_IMAGE")
                 if rec and rec.acked and rec.result == 0:
+                    image_transfer_active = True
                     if img_fig is None:
                         plt.ion()
                         img_fig, img_ax = init_image_preview()
@@ -470,6 +503,7 @@ def main():
                     console.print(f"  [{APPLE[4]}]Image transfer started[/] "
                                   f"watch preview window")
                 else:
+                    image_transfer_active = False
                     console.print(
                         f"  [{APPLE[3]}]Image transfer was not confirmed[/]"
                     )
@@ -483,8 +517,13 @@ def main():
                 # BALLOON_BAND_SBAND=2, BALLOON_BAND_UHF=1
                 band = 1 if b == "2" else 2
                 state.clear_bulk()
+                image_transfer_active = False
                 rec = send_command(ser, state, logger, "START_BULK", param=band)
                 if rec and rec.acked and rec.result == 0:
+                    if bulk_fig is None:
+                        plt.ion()
+                        bulk_fig, bulk_ax = init_bulk_preview()
+                        plt.show(block=False)
                     console.print(f"  [{APPLE[5]}]Bulk test started on "
                                   f"{'UHF' if band == 1 else 'S-Band'}[/]")
                 else:
@@ -495,6 +534,7 @@ def main():
             elif choice == "6":
                 send_command(ser, state, logger, "STOP")
                 auto_stop_time = None
+                image_transfer_active = False
 
             elif choice == "7":
                 console.print("  Band for power sweep:")
@@ -565,8 +605,13 @@ def main():
                 duration = int(d) if d.isdigit() else 60
 
                 state.clear_bulk()
+                image_transfer_active = False
                 rec = send_command(ser, state, logger, "START_BULK", param=band)
                 if rec and rec.acked and rec.result == 0:
+                    if bulk_fig is None:
+                        plt.ion()
+                        bulk_fig, bulk_ax = init_bulk_preview()
+                        plt.show(block=False)
                     auto_stop_time = time.time() + duration
                     console.print(
                         f"  [{APPLE[2]}]Brute force: "

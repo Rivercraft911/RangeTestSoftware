@@ -82,6 +82,8 @@ class DashboardUiTests(unittest.TestCase):
     def test_metrics_packet_loss_and_progress(self):
         metrics = _derive_dashboard_metrics(
             make_snapshot(
+                uhf_rssi=[-29.0, -28.5],
+                sband_rssi=[-12.0, -11.5],
                 bulk_total=117,
                 bulk_received_count=81,
             ),
@@ -90,6 +92,8 @@ class DashboardUiTests(unittest.TestCase):
         self.assertEqual(metrics["missing_count"], 36)
         self.assertAlmostEqual(metrics["packet_loss_pct"], 30.7692307, places=5)
         self.assertAlmostEqual(metrics["transfer_progress_pct"], 69.2307692, places=5)
+        self.assertAlmostEqual(metrics["uhf_margin_now_db"], 101.5, places=4)
+        self.assertAlmostEqual(metrics["sband_margin_now_db"], 105.5, places=4)
 
     def test_metrics_throughput_trend_labels(self):
         rising = _derive_dashboard_metrics(
@@ -127,6 +131,20 @@ class DashboardUiTests(unittest.TestCase):
 
     def test_dashboard_smoke_render(self):
         fig, axes = init_dashboard()
+        self.assertEqual(
+            set(axes.keys()),
+            {
+                "uhf_rssi",
+                "sb_rssi",
+                "pkt_loss",
+                "uhf_snr",
+                "sb_snr",
+                "progress",
+                "throughput",
+                "link_margin",
+                "pkt_stats",
+            },
+        )
         empty = make_snapshot()
         update_dashboard(fig, axes, empty, 1)
 
@@ -153,6 +171,7 @@ class DashboardUiTests(unittest.TestCase):
             uhf_rssi=[-29.4, -29.2, -29.0],
             uhf_snr=[9.2, 9.5, 9.8],
             sband_rssi=[-10.4, -10.2, -10.0],
+            sband_snr=[10.1, 10.3, 10.4],
             throughput=[5.0, 5.1, 5.0, 5.2, 5.8],
             last_beacon=beacon,
             last_beacon_time=time.time() - 3,
@@ -164,7 +183,10 @@ class DashboardUiTests(unittest.TestCase):
             bulk_total=117,
         )
         update_dashboard(fig, axes, active, 1)
-        self.assertEqual(axes["status"].get_title(), "Status")
+        self.assertEqual(axes["pkt_loss"].get_title(), "")
+        self.assertEqual(axes["progress"].get_title(), "Transfer Progress")
+        self.assertEqual(axes["sb_snr"].get_title(), "S-Band SNR")
+        self.assertEqual(axes["link_margin"].get_title(), "Link Margin")
 
 
 if __name__ == "__main__":
