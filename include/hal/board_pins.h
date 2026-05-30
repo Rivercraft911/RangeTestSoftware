@@ -2,12 +2,17 @@
 #define BOARD_PINS_H
 
 #include "hardware/spi.h"
+#include "hardware/uart.h"
 
 // RPI & ACDS
-#define PIN_RPI_TX 0u
-#define PIN_RPI_RX 1u
-#define PIN_RPI_ENABLE 2u
-#define PIN_RPI_RESET 3u
+// Raspberry Pi payload link. Pins mirror the samwise picubed board
+// (uart0 on GPIO30/31, power-enable on GPIO29). NOTE: GPIO30/31 only exist on
+// the RP2350B (picubed); on a stock pico2 (RP2350A) only GPIO0-29 are present.
+#define RPI_UART_PORT uart0
+#define RPI_UART_BAUD_HZ 115200u
+#define PIN_RPI_TX 31u     // SAMWISE_UART_TX
+#define PIN_RPI_RX 30u     // SAMWISE_UART_RX
+#define PIN_RPI_ENABLE 29u // SAMWISE_RPI_ENAB
 #define PIN_ACDS_TX 4u
 #define PIN_ACDS_RX 5u
 

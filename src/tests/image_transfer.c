@@ -5,6 +5,7 @@
 #include <string.h>
 
 #include "hal/board_pins.h"
+#include "hal/rpi.h"
 #include "hardware/pio.h"
 #include "pico/stdlib.h"
 #include "pico/time.h"
@@ -436,6 +437,10 @@ int main(void) {
 
     board_pins_init();
     led_init();
+
+    // Power the Raspberry Pi and add its UART as a stdio transport, so image
+    // transfer works over the wired RPi link as well as USB.
+    rpi_init();
 
     radio_status_t st = sx1280f27_init();
     if (st != RADIO_STATUS_OK) {

@@ -270,6 +270,7 @@ pico_add_extra_outputs(RangeTestObserver)
 add_executable(ImageTransfer
         src/tests/image_transfer.c
         src/hal/board_pins.c
+        src/hal/rpi.c
         src/radio/radio_sx1280f27.c
         )
 
@@ -285,9 +286,11 @@ pico_enable_stdio_usb(ImageTransfer 1)
 
 target_link_libraries(ImageTransfer
         pico_stdlib
+        pico_stdio_uart
         hardware_spi
         hardware_pio
         hardware_timer
+        hardware_uart
         )
 
 target_include_directories(ImageTransfer PRIVATE
