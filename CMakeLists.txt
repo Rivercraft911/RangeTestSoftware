@@ -51,8 +51,9 @@ target_compile_definitions(RangeTestSoftware PRIVATE RANGE_NODE_NO_MAIN SX1280F2
 # Generate PIO header
 pico_generate_pio_header(RangeTestSoftware ${CMAKE_CURRENT_LIST_DIR}/pio/ws2812.pio)
 
-# Modify the below lines to enable/disable output over UART/USB
-pico_enable_stdio_uart(RangeTestSoftware 0)
+# Console is routed over both UART0 (GPIO0 TX / GPIO1 RX -> RPi interface board, 115200)
+# and USB CDC (bench debugging). Set either to 0 to disable that backend.
+pico_enable_stdio_uart(RangeTestSoftware 1)
 pico_enable_stdio_usb(RangeTestSoftware 1)
 
 # Add the standard library to the build
@@ -86,7 +87,7 @@ pico_set_program_version(ManualRadioBringupTest "0.1")
 
 pico_generate_pio_header(ManualRadioBringupTest ${CMAKE_CURRENT_LIST_DIR}/pio/ws2812.pio)
 
-pico_enable_stdio_uart(ManualRadioBringupTest 0)
+pico_enable_stdio_uart(ManualRadioBringupTest 1)
 pico_enable_stdio_usb(ManualRadioBringupTest 1)
 
 target_link_libraries(ManualRadioBringupTest
@@ -110,7 +111,7 @@ add_executable(UsbConsoleSanityTest
 pico_set_program_name(UsbConsoleSanityTest "UsbConsoleSanityTest")
 pico_set_program_version(UsbConsoleSanityTest "0.1")
 
-pico_enable_stdio_uart(UsbConsoleSanityTest 0)
+pico_enable_stdio_uart(UsbConsoleSanityTest 1)
 pico_enable_stdio_usb(UsbConsoleSanityTest 1)
 
 target_link_libraries(UsbConsoleSanityTest
@@ -128,7 +129,7 @@ add_executable(UHFConstantFullPowerTx
 pico_set_program_name(UHFConstantFullPowerTx "UHFConstantFullPowerTx")
 pico_set_program_version(UHFConstantFullPowerTx "0.1")
 
-pico_enable_stdio_uart(UHFConstantFullPowerTx 0)
+pico_enable_stdio_uart(UHFConstantFullPowerTx 1)
 pico_enable_stdio_usb(UHFConstantFullPowerTx 1)
 
 target_link_libraries(UHFConstantFullPowerTx
@@ -155,7 +156,7 @@ pico_set_program_version(RangeTestNode "0.1")
 
 pico_generate_pio_header(RangeTestNode ${CMAKE_CURRENT_LIST_DIR}/pio/ws2812.pio)
 
-pico_enable_stdio_uart(RangeTestNode 0)
+pico_enable_stdio_uart(RangeTestNode 1)
 pico_enable_stdio_usb(RangeTestNode 1)
 
 target_link_libraries(RangeTestNode
@@ -188,7 +189,7 @@ pico_set_program_version(RangeTestNodeA "0.1")
 
 pico_generate_pio_header(RangeTestNodeA ${CMAKE_CURRENT_LIST_DIR}/pio/ws2812.pio)
 
-pico_enable_stdio_uart(RangeTestNodeA 0)
+pico_enable_stdio_uart(RangeTestNodeA 1)
 pico_enable_stdio_usb(RangeTestNodeA 1)
 
 target_link_libraries(RangeTestNodeA
@@ -219,7 +220,7 @@ pico_set_program_version(RangeTestNodeB "0.1")
 
 pico_generate_pio_header(RangeTestNodeB ${CMAKE_CURRENT_LIST_DIR}/pio/ws2812.pio)
 
-pico_enable_stdio_uart(RangeTestNodeB 0)
+pico_enable_stdio_uart(RangeTestNodeB 1)
 pico_enable_stdio_usb(RangeTestNodeB 1)
 
 target_link_libraries(RangeTestNodeB
@@ -250,7 +251,7 @@ pico_set_program_version(RangeTestObserver "0.1")
 
 pico_generate_pio_header(RangeTestObserver ${CMAKE_CURRENT_LIST_DIR}/pio/ws2812.pio)
 
-pico_enable_stdio_uart(RangeTestObserver 0)
+pico_enable_stdio_uart(RangeTestObserver 1)
 pico_enable_stdio_usb(RangeTestObserver 1)
 
 target_link_libraries(RangeTestObserver
@@ -280,7 +281,7 @@ pico_set_program_version(ImageTransfer "0.1")
 
 pico_generate_pio_header(ImageTransfer ${CMAKE_CURRENT_LIST_DIR}/pio/ws2812.pio)
 
-pico_enable_stdio_uart(ImageTransfer 0)
+pico_enable_stdio_uart(ImageTransfer 1)
 pico_enable_stdio_usb(ImageTransfer 1)
 
 target_link_libraries(ImageTransfer
@@ -312,7 +313,7 @@ pico_set_program_version(BalloonFlight "0.1")
 
 pico_generate_pio_header(BalloonFlight ${CMAKE_CURRENT_LIST_DIR}/pio/ws2812.pio)
 
-pico_enable_stdio_uart(BalloonFlight 0)
+pico_enable_stdio_uart(BalloonFlight 1)
 pico_enable_stdio_usb(BalloonFlight 1)
 
 target_link_libraries(BalloonFlight
@@ -345,7 +346,7 @@ pico_set_program_version(BalloonGround "0.1")
 
 pico_generate_pio_header(BalloonGround ${CMAKE_CURRENT_LIST_DIR}/pio/ws2812.pio)
 
-pico_enable_stdio_uart(BalloonGround 0)
+pico_enable_stdio_uart(BalloonGround 1)
 pico_enable_stdio_usb(BalloonGround 1)
 
 target_link_libraries(BalloonGround

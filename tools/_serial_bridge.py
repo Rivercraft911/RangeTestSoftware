@@ -22,14 +22,37 @@ RF_PROFILES = {
 }
 
 
+import os
+
+# RPi interface board: the Pico console arrives on the Pi's UART, which shows up as
+# /dev/ttyAMA0, /dev/ttyS0, or the /dev/serial0 symlink (none contain "usb").
+_RPI_UART_MATCHES = ("ttyama", "ttys0", "serial0", "serial1")
+_RPI_UART_SYMLINKS = ("/dev/serial0", "/dev/serial1")
+
+
+class _SimplePort:
+    """Minimal stand-in for a ListPortInfo (symlinks aren't enumerated by pyserial)."""
+
+    def __init__(self, device, description):
+        self.device = device
+        self.description = description
+
+
 def list_serial_ports():
     ports = serial.tools.list_ports.comports()
-    usb_ports = [p for p in ports if "usb" in p.device.lower()
-                 or "acm" in p.device.lower()
-                 or "usbmodem" in p.device.lower()]
-    if not usb_ports:
-        usb_ports = list(ports)
-    return usb_ports
+    sel = [p for p in ports if "usb" in p.device.lower()
+           or "acm" in p.device.lower()
+           or "usbmodem" in p.device.lower()
+           or any(m in p.device.lower() for m in _RPI_UART_MATCHES)]
+    # pyserial doesn't list the /dev/serial0 symlink; add it if the Pi exposes it.
+    seen = {p.device for p in sel}
+    for link in _RPI_UART_SYMLINKS:
+        if os.path.exists(link) and link not in seen:
+            sel.append(_SimplePort(link, "RPi UART"))
+            seen.add(link)
+    if not sel:
+        sel = list(ports)
+    return sel
 
 
 def pick_serial_port():

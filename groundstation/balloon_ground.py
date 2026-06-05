@@ -42,7 +42,7 @@ from _dashboard import (
     init_image_preview, update_image_preview,
     init_bulk_preview, update_bulk_preview, save_image,
 )
-from _serial_bridge import APPLE, pick_serial_port, RF_PROFILES
+from _serial_bridge import APPLE, pick_serial_port, list_serial_ports, RF_PROFILES
 
 console = Console(highlight=False)
 
@@ -631,12 +631,7 @@ def main():
                 reader.stop()
                 ser.close()
                 # Port selection inline (avoids stdin conflict with input thread)
-                ports = [p for p in serial.tools.list_ports.comports()
-                         if "usb" in p.device.lower()
-                         or "acm" in p.device.lower()
-                         or "usbmodem" in p.device.lower()]
-                if not ports:
-                    ports = list(serial.tools.list_ports.comports())
+                ports = list_serial_ports()
                 if not ports:
                     console.print(f"  [{APPLE[3]}]No serial ports found[/]")
                     break
